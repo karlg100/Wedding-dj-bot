@@ -60,6 +60,46 @@ function getOrCreateStableDeviceName(): string {
   }
 }
 
+// Persisted only on the SPEAKER device, so a reload (or an accidental tab
+// close/reopen) can resume the current track from roughly where it left
+// off instead of restarting from 0:00. savedAt lets us extrapolate how
+// much time has actually elapsed since the last snapshot, since playback
+// keeps progressing in the moments between snapshots and the reload.
+const RESUME_KEY = "wedding-dj-resume-snapshot";
+
+type ResumeSnapshot = {
+  trackUri: string;
+  positionMs: number;
+  isPaused: boolean;
+  savedAt: number;
+};
+
+function saveResumeSnapshot(snapshot: ResumeSnapshot) {
+  try {
+    localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Storage unavailable — resuming just won't work this session, not fatal.
+  }
+}
+
+function readResumeSnapshot(): ResumeSnapshot | null {
+  try {
+    const raw = localStorage.getItem(RESUME_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearResumeSnapshot() {
+  try {
+    localStorage.removeItem(RESUME_KEY);
+  } catch {
+    // No-op.
+  }
+}
+
 export function useSpotifyPlayer(speaker: { id: string | null; name: string | null }) {
   const speakerDeviceId = speaker.id;
   const speakerDeviceName = speaker.name;
@@ -141,12 +181,21 @@ export function useSpotifyPlayer(speaker: { id: string | null; name: string | nu
 
         player.addListener("player_state_changed", (state: any) => {
           if (cancelled || !state) return;
+          const trackUri = state.track_window?.current_track?.uri ?? null;
           setPlayback({
             isPaused: state.paused,
             positionMs: state.position,
             durationMs: state.duration,
-            trackUri: state.track_window?.current_track?.uri ?? null,
+            trackUri,
           });
+          if (isSpeakerRef.current && trackUri) {
+            saveResumeSnapshot({
+              trackUri,
+              positionMs: state.position,
+              isPaused: state.paused,
+              savedAt: Date.now(),
+            });
+          }
         });
 
         player.addListener("initialization_error", ({ message }: { message: string }) => {
@@ -235,7 +284,7 @@ export function useSpotifyPlayer(speaker: { id: string | null; name: string | nu
     return res;
   }
 
-  async function playUri(uri: string) {
+  async function playUri(uri: string, startPositionMs?: number) {
     if (!speakerDeviceId) return;
     // iOS Safari (and other mobile browsers) block audio that isn't
     // triggered by a direct user gesture. activateElement() unlocks the
@@ -249,10 +298,14 @@ export function useSpotifyPlayer(speaker: { id: string | null; name: string | nu
         // No-op — some SDK versions lack this method, or it's unlocked.
       }
     }
+    const body: Record<string, unknown> = { uris: [uri] };
+    if (startPositionMs && startPositionMs > 0) {
+      body.position_ms = Math.round(startPositionMs);
+    }
     const res = await spotifyCommand(`/me/player/play?device_id=${speakerDeviceId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uris: [uri] }),
+      body: JSON.stringify(body),
     });
     if (res && !res.ok && res.status !== 204) {
       const body = await res.text().catch(() => "");
@@ -326,6 +379,23 @@ export function useSpotifyPlayer(speaker: { id: string | null; name: string | nu
     }
   }
 
+  // Returns the position (ms) to resume `trackUri` at, based on a
+  // snapshot saved before a reload — or null if there's nothing usable
+  // (different track, no snapshot, or it was already cleared). If
+  // playback wasn't paused when saved, extrapolates forward by however
+  // long has passed since, so a quick reload doesn't leave you noticeably
+  // behind where the track actually would have been.
+  function getResumePosition(trackUri: string): number | null {
+    const snapshot = readResumeSnapshot();
+    if (!snapshot || snapshot.trackUri !== trackUri) return null;
+    if (snapshot.isPaused) return snapshot.positionMs;
+    const elapsed = Date.now() - snapshot.savedAt;
+    // Don't trust a snapshot that's suspiciously old (e.g. the page sat
+    // closed for a while) — the track may well have already finished.
+    if (elapsed > 5 * 60_000) return null;
+    return snapshot.positionMs + elapsed;
+  }
+
   const becomeSpeaker = useCallback(async () => {
     if (!deviceId) return false;
     const res = await fetch("/api/speaker", {
@@ -354,5 +424,7 @@ export function useSpotifyPlayer(speaker: { id: string | null; name: string | nu
     restartTrack,
     unlockAudio,
     becomeSpeaker,
+    getResumePosition,
+    clearResumeSnapshot,
   };
 }

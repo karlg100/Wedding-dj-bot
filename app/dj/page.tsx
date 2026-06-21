@@ -80,7 +80,8 @@ export default function DjPage() {
       queue?.nowPlaying &&
       queue.nowPlaying.id !== lastClickPlayedId.current
     ) {
-      player.playUri(queue.nowPlaying.spotifyUri);
+      const resumeAt = player.getResumePosition(queue.nowPlaying.spotifyUri);
+      player.playUri(queue.nowPlaying.spotifyUri, resumeAt ?? undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue?.nowPlaying?.id, player.status, player.isSpeaker]);
@@ -104,6 +105,7 @@ export default function DjPage() {
     const upcoming = queue?.upNext[0];
     if (upcoming) {
       lastClickPlayedId.current = upcoming.id;
+      player.clearResumeSnapshot();
       player.playUri(upcoming.spotifyUri);
     }
     try {
