@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { QueueState, PHASES, Phase, VibeSynthesis } from "@/lib/types";
+import { SortableQueue } from "@/app/components/SortableQueue";
 
 export default function AdminPage() {
   const [passcode, setPasscode] = useState("");
@@ -199,30 +200,13 @@ export default function AdminPage() {
         <h2 className="text-xs uppercase tracking-wider text-ink/45 font-semibold mb-2 px-1">
           Queue · {queue?.upNext.length ?? 0}
         </h2>
-        <ul className="space-y-1.5">
-          {queue?.upNext.map((t, i) => (
-            <li
-              key={t.id}
-              className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-white border border-ink/8"
-            >
-              <span className="text-xs text-ink/35 w-4 text-right flex-shrink-0">{i + 1}</span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{t.title}</p>
-                <p className="text-xs text-ink/50 truncate">
-                  {t.artist}
-                  {t.requestedBy ? ` · ${t.requestedBy}` : ""}
-                </p>
-              </div>
-              <button
-                onClick={() => call("remove", { entryId: t.id })}
-                disabled={busy}
-                className="text-ink/30 hover:text-rust text-xs px-2 py-1 flex-shrink-0"
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
+        {queue && queue.upNext.length > 0 && (
+          <SortableQueue
+            tracks={queue.upNext}
+            onRemove={(entryId) => call("remove", { entryId })}
+            onReorder={(orderedIds) => call("reorder", { orderedIds })}
+          />
+        )}
       </div>
     </main>
   );

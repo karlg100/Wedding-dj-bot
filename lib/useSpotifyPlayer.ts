@@ -11,10 +11,18 @@ declare global {
 
 type PlayerStatus = "idle" | "loading" | "ready" | "error" | "no-token";
 
+type PlaybackState = {
+  isPaused: boolean;
+  positionMs: number;
+  durationMs: number;
+  trackUri: string | null;
+};
+
 export function useSpotifyPlayer() {
   const [status, setStatus] = useState<PlayerStatus>("idle");
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<PlaybackState | null>(null);
   const playerRef = useRef<any>(null);
   const tokenRef = useRef<string | null>(null);
 
@@ -79,6 +87,16 @@ export function useSpotifyPlayer() {
           if (cancelled) return;
           setStatus("error");
           setErrorMessage("Player went offline. Check the connection on this device.");
+        });
+
+        player.addListener("player_state_changed", (state: any) => {
+          if (cancelled || !state) return;
+          setPlayback({
+            isPaused: state.paused,
+            positionMs: state.position,
+            durationMs: state.duration,
+            trackUri: state.track_window?.current_track?.uri ?? null,
+          });
         });
 
         player.addListener("initialization_error", ({ message }: { message: string }) => {
@@ -159,7 +177,34 @@ export function useSpotifyPlayer() {
   }
 
   async function pause() {
-    playerRef.current?.pause();
+    await playerRef.current?.pause();
+  }
+
+  async function resume() {
+    await playerRef.current?.resume();
+  }
+
+  async function togglePlay() {
+    await playerRef.current?.togglePlay();
+  }
+
+  async function seek(positionMs: number) {
+    const clamped = Math.max(0, positionMs);
+    await playerRef.current?.seek(clamped);
+  }
+
+  async function seekRelative(deltaMs: number) {
+    const state = await playerRef.current?.getCurrentState();
+    if (!state) return;
+    const target = Math.max(
+      0,
+      Math.min(state.duration, state.position + deltaMs)
+    );
+    await playerRef.current?.seek(target);
+  }
+
+  async function restartTrack() {
+    await seek(0);
   }
 
   const [audioUnlocked, setAudioUnlocked] = useState(false);
@@ -175,5 +220,19 @@ export function useSpotifyPlayer() {
     }
   }
 
-  return { status, deviceId, errorMessage, audioUnlocked, playUri, pause, unlockAudio };
+  return {
+    status,
+    deviceId,
+    errorMessage,
+    audioUnlocked,
+    playback,
+    playUri,
+    pause,
+    resume,
+    togglePlay,
+    seek,
+    seekRelative,
+    restartTrack,
+    unlockAudio,
+  };
 }

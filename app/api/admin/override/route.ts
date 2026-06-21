@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setPhase, advanceQueue, removeFromQueue, getQueueState, saveQueueState } from "@/lib/queue";
+import { setPhase, advanceQueue, removeFromQueue, getQueueState, saveQueueState, reorderQueue } from "@/lib/queue";
 import { searchTracks, getAudioFeatures } from "@/lib/spotify";
 import { QueuedTrack } from "@/lib/types";
 
@@ -29,6 +29,10 @@ export async function POST(req: NextRequest) {
     }
     case "remove": {
       const state = await removeFromQueue(body.entryId);
+      return NextResponse.json({ state });
+    }
+    case "reorder": {
+      const state = await reorderQueue(body.orderedIds ?? []);
       return NextResponse.json({ state });
     }
     case "force_play_now": {

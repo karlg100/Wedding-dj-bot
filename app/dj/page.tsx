@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSpotifyPlayer } from "@/lib/useSpotifyPlayer";
 import { QueueState } from "@/lib/types";
 import { PHASES, Phase } from "@/lib/types";
+import { SortableQueue } from "@/app/components/SortableQueue";
 
 function formatDuration(ms: number) {
   const totalSec = Math.round(ms / 1000);
@@ -95,6 +96,25 @@ export default function DjPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entryId }),
+    });
+    const data = await res.json();
+    setQueue(data);
+  }
+
+  async function reorderTracks(orderedIds: string[]) {
+    // Optimistic update so the drag feels instant; the 4s poll will
+    // reconcile with the server either way, and the response below
+    // corrects it immediately if anything mismatches.
+    setQueue((prev) => {
+      if (!prev) return prev;
+      const byId = new Map(prev.upNext.map((t) => [t.id, t]));
+      const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean) as typeof prev.upNext;
+      return { ...prev, upNext: reordered };
+    });
+    const res = await fetch("/api/queue/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderedIds }),
     });
     const data = await res.json();
     setQueue(data);
@@ -213,6 +233,10 @@ export default function DjPage() {
             </div>
           )}
 
+          {queue?.nowPlaying && player.status === "ready" && (
+            <PlaybackTransport player={player} />
+          )}
+
           <div className="flex gap-2 mt-5">
             <button
               onClick={() => advance("skipped")}
@@ -251,37 +275,11 @@ export default function DjPage() {
           Up next · {queue?.upNext.length ?? 0}
         </h2>
         {queue && queue.upNext.length > 0 ? (
-          <ul className="space-y-1.5 mb-8">
-            {queue.upNext.map((t, i) => (
-              <li
-                key={t.id}
-                className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-white border border-ink/8"
-              >
-                <span className="text-xs text-ink/35 w-4 flex-shrink-0 text-right">
-                  {i + 1}
-                </span>
-                {t.albumArt ? (
-                  <img src={t.albumArt} alt="" className="w-10 h-10 rounded-md object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-10 h-10 rounded-md bg-paper-deep flex-shrink-0" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{t.title}</p>
-                  <p className="text-xs text-ink/50 truncate">
-                    {t.artist} · {formatDuration(t.durationMs)}
-                    {t.requestedBy ? ` · ${t.requestedBy}` : t.source === "seed" ? " · backbone" : ""}
-                  </p>
-                </div>
-                <button
-                  onClick={() => removeTrack(t.id)}
-                  className="text-ink/30 hover:text-rust text-xs px-2 py-1 flex-shrink-0"
-                  aria-label={`Remove ${t.title}`}
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
+          <SortableQueue
+            tracks={queue.upNext}
+            onRemove={removeTrack}
+            onReorder={reorderTracks}
+          />
         ) : (
           <p className="text-sm text-ink/40 mb-8 px-1">
             Queue&rsquo;s empty — seed a playlist or wait on requests.
@@ -289,6 +287,142 @@ export default function DjPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function formatMs(ms: number) {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
+function PlaybackTransport({ player }: { player: ReturnType<typeof useSpotifyPlayer> }) {
+  const { playback } = player;
+  const [tickPosition, setTickPosition] = useState(playback?.positionMs ?? 0);
+  const [seeking, setSeeking] = useState(false);
+  const [seekValue, setSeekValue] = useState(0);
+
+  // Sync the local ticking clock whenever real SDK state arrives.
+  useEffect(() => {
+    if (playback) setTickPosition(playback.positionMs);
+  }, [playback?.positionMs, playback?.trackUri]);
+
+  // Smoothly advance the displayed position between SDK state updates,
+  // which only fire on actual changes (play/pause/seek/track change) —
+  // without this the bar would jump in chunks instead of flowing.
+  useEffect(() => {
+    if (!playback || playback.isPaused || seeking) return;
+    const interval = setInterval(() => {
+      setTickPosition((p) => Math.min(playback.durationMs, p + 250));
+    }, 250);
+    return () => clearInterval(interval);
+  }, [playback, seeking]);
+
+  if (!playback) {
+    return <p className="text-xs text-paper/40 mt-3">Loading playback…</p>;
+  }
+
+  const displayPosition = seeking ? seekValue : tickPosition;
+  const pct = playback.durationMs
+    ? Math.min(100, (displayPosition / playback.durationMs) * 100)
+    : 0;
+
+  return (
+    <div className="mt-5">
+      {/* Progress bar */}
+      <input
+        type="range"
+        min={0}
+        max={playback.durationMs || 0}
+        value={displayPosition}
+        onChange={(e) => {
+          setSeeking(true);
+          setSeekValue(Number(e.target.value));
+        }}
+        onMouseUp={(e) => {
+          setSeeking(false);
+          player.seek(Number((e.target as HTMLInputElement).value));
+        }}
+        onTouchEnd={(e) => {
+          setSeeking(false);
+          player.seek(Number((e.target as HTMLInputElement).value));
+        }}
+        className="w-full accent-blush h-1.5"
+        style={{
+          background: `linear-gradient(to right, var(--blush) ${pct}%, rgba(255,255,255,0.15) ${pct}%)`,
+        }}
+        aria-label="Seek"
+      />
+      <div className="flex justify-between text-[10px] text-paper/40 mt-1 mb-3">
+        <span>{formatMs(displayPosition)}</span>
+        <span>{formatMs(playback.durationMs)}</span>
+      </div>
+
+      {/* Transport buttons */}
+      <div className="flex items-center justify-center gap-5">
+        <button
+          onClick={() => player.restartTrack()}
+          aria-label="Restart track"
+          className="text-paper/70 hover:text-paper p-2"
+        >
+          <RestartIcon />
+        </button>
+        <button
+          onClick={() => player.seekRelative(-10000)}
+          aria-label="Rewind 10 seconds"
+          className="text-paper/70 hover:text-paper p-2"
+        >
+          <SeekIcon direction="back" />
+        </button>
+        <button
+          onClick={() => player.togglePlay()}
+          aria-label={playback.isPaused ? "Play" : "Pause"}
+          className="bg-paper text-ink rounded-full p-3.5 hover:opacity-90 transition-opacity"
+        >
+          {playback.isPaused ? <PlayIcon /> : <PauseIcon />}
+        </button>
+        <button
+          onClick={() => player.seekRelative(10000)}
+          aria-label="Forward 10 seconds"
+          className="text-paper/70 hover:text-paper p-2"
+        >
+          <SeekIcon direction="forward" />
+        </button>
+        <div className="w-9" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+function PauseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+    </svg>
+  );
+}
+function RestartIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="1 4 1 10 7 10" />
+      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+    </svg>
+  );
+}
+function SeekIcon({ direction }: { direction: "back" | "forward" }) {
+  const flip = direction === "back" ? "scale(-1,1)" : undefined;
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ transform: flip }}>
+      <path d="M11 5V1L5 7l6 6V9c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H3c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+    </svg>
   );
 }
 
