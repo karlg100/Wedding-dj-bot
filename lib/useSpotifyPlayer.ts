@@ -18,15 +18,23 @@ type PlaybackState = {
   trackUri: string | null;
 };
 
-// `speakerDeviceId` is the server-designated speaker (from queue state).
-// Every device initializes its own Web Playback SDK instance — that's what
-// makes it eligible to ever become the speaker — but only issues real
-// playback commands against the SPEAKER's Spotify Connect device id, and
-// only auto-claims the Connect "active device" role for itself if it IS
-// the designated speaker. Non-speaker devices stay connected but passive:
-// they can see playback state (Spotify broadcasts state to all Connect
-// devices watching the same account) without fighting over which one
-// actually outputs audio.
+// `speakerDeviceId`/`speakerDeviceName` describe the server-designated
+// speaker (from queue state). Every device initializes its own Web
+// Playback SDK instance — that's what makes it eligible to ever become
+// the speaker — but only issues real playback commands against the
+// SPEAKER's Spotify Connect device id, and only auto-claims the Connect
+// "active device" role for itself if it IS the designated speaker.
+// Non-speaker devices stay connected but passive: they can see playback
+// state (Spotify broadcasts state to all Connect devices watching the
+// same account) without fighting over which one actually outputs audio.
+//
+// Identity is matched by NAME, not raw device id. Spotify issues a new
+// device_id every time the Web Playback SDK reconnects (e.g. on a page
+// reload), even though this browser's stable name doesn't change — so
+// matching on id alone would mean every reload "loses" the speaker role
+// and needs re-selecting. Matching by name means a reloaded tab
+// recognizes "I was already the speaker" and re-claims automatically
+// with its fresh id.
 // A short, human-friendly suffix so multiple devices are distinguishable
 // in the device picker (e.g. "Wedding DJ — Karl's iPhone — 4f2a"),
 // generated ONCE per browser and persisted, not regenerated on every page
@@ -52,7 +60,9 @@ function getOrCreateStableDeviceName(): string {
   }
 }
 
-export function useSpotifyPlayer(speakerDeviceId: string | null) {
+export function useSpotifyPlayer(speaker: { id: string | null; name: string | null }) {
+  const speakerDeviceId = speaker.id;
+  const speakerDeviceName = speaker.name;
   const [status, setStatus] = useState<PlayerStatus>("idle");
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [deviceName] = useState<string>(getOrCreateStableDeviceName);
@@ -62,7 +72,8 @@ export function useSpotifyPlayer(speakerDeviceId: string | null) {
   const tokenRef = useRef<string | null>(null);
   const isSpeakerRef = useRef(false);
 
-  const isSpeaker = Boolean(deviceId && speakerDeviceId && deviceId === speakerDeviceId);
+  // Name-based, not id-based — see the comment block above the hook for why.
+  const isSpeaker = Boolean(deviceName && speakerDeviceName && deviceName === speakerDeviceName);
   isSpeakerRef.current = isSpeaker;
 
   useEffect(() => {
@@ -174,12 +185,16 @@ export function useSpotifyPlayer(speakerDeviceId: string | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // If THIS device just became the designated speaker (e.g. someone tapped
-  // "Make this the speaker" on it, or it reloaded while already assigned),
-  // claim the Spotify Connect active-device role. play:false so it doesn't
-  // yank audio into starting unexpectedly.
+  // If THIS device is (by name) the designated speaker — whether it was
+  // just explicitly assigned, or it reloaded and recognizes its own name
+  // matches the existing assignment — claim the Spotify Connect
+  // active-device role with its current id, AND tell the server about
+  // this fresh id if it's drifted from what's stored (always true after
+  // a reload, since Spotify hands out a new id per connection).
+  // play:false so this doesn't yank audio into starting unexpectedly.
   useEffect(() => {
     if (!isSpeaker || !deviceId || !tokenRef.current) return;
+
     fetch("https://api.spotify.com/v1/me/player", {
       method: "PUT",
       headers: {
@@ -190,6 +205,19 @@ export function useSpotifyPlayer(speakerDeviceId: string | null) {
     }).catch(() => {
       // Non-fatal — explicit device_id on each command is the fallback.
     });
+
+    if (speakerDeviceId !== deviceId) {
+      fetch("/api/speaker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId, deviceName }),
+      }).catch(() => {
+        // Non-fatal — this device still works as the speaker locally even
+        // if the server-side record doesn't update; it'll retry on the
+        // next render where this effect's dependencies change.
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSpeaker, deviceId]);
 
   // All transport commands target the SPEAKER's device id, whether or not

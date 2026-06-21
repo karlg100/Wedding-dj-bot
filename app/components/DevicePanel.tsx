@@ -51,7 +51,7 @@ export function DevicePanel({
     }
   }
 
-  const speakerIsThisDevice = queue?.speakerDeviceId && queue.speakerDeviceId === player.deviceId;
+  const speakerIsThisDevice = player.isSpeaker;
 
   return (
     <div className="mb-6 rounded-2xl bg-white border border-ink/10 p-4 rise-in">

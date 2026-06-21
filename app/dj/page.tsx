@@ -20,7 +20,10 @@ export default function DjPage() {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [advancing, setAdvancing] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
-  const player = useSpotifyPlayer(queue?.speakerDeviceId ?? null);
+  const player = useSpotifyPlayer({
+    id: queue?.speakerDeviceId ?? null,
+    name: queue?.speakerDeviceName ?? null,
+  });
 
   const refreshQueue = useCallback(async () => {
     try {
