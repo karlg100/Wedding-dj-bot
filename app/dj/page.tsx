@@ -29,13 +29,35 @@ export default function DjPage() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/auth/refresh")
-      .then((r) => r.json())
-      .then((d) => setConnected(d.connected))
-      .catch(() => setConnected(false));
+    let cancelled = false;
+
+    async function checkConnection(attempt = 0) {
+      try {
+        const res = await fetch("/api/auth/refresh", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (cancelled) return;
+        setConnected(Boolean(d.connected));
+      } catch {
+        if (cancelled) return;
+        // A failed/slow request (e.g. cold serverless start) doesn't mean
+        // Spotify isn't connected — retry a few times before showing the
+        // reconnect screen, rather than collapsing any hiccup into "false".
+        if (attempt < 3) {
+          setTimeout(() => checkConnection(attempt + 1), 800 * (attempt + 1));
+        } else {
+          setConnected(false);
+        }
+      }
+    }
+
+    checkConnection();
     refreshQueue();
     const interval = setInterval(refreshQueue, 4000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [refreshQueue]);
 
   // When a new track becomes "now playing" — e.g. picked up via the 4s

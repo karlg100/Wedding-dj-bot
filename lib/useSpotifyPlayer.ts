@@ -31,10 +31,23 @@ export function useSpotifyPlayer() {
 
     async function init() {
       setStatus("loading");
-      const res = await fetch("/api/auth/refresh");
-      const data = await res.json();
-      if (!data.connected || !data.accessToken) {
-        if (!cancelled) setStatus("no-token");
+
+      let data: { connected: boolean; accessToken: string | null } | null = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const res = await fetch("/api/auth/refresh", { cache: "no-store" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
+          break;
+        } catch {
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+          }
+        }
+      }
+      if (cancelled) return;
+      if (!data || !data.connected || !data.accessToken) {
+        setStatus("no-token");
         return;
       }
       tokenRef.current = data.accessToken;
