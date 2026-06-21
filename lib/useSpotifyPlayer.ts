@@ -52,10 +52,27 @@ export function useSpotifyPlayer() {
           volume: 0.8,
         });
 
-        player.addListener("ready", ({ device_id }: { device_id: string }) => {
+        player.addListener("ready", async ({ device_id }: { device_id: string }) => {
           if (cancelled) return;
           setDeviceId(device_id);
           setStatus("ready");
+          // Actively claim this browser tab as the active Spotify Connect
+          // device, so playback doesn't stay routed to whatever device
+          // (e.g. the native app) was last active. Don't auto-start
+          // playback (play: false) — just take over the speaker role.
+          try {
+            await fetch("https://api.spotify.com/v1/me/player", {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${tokenRef.current}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ device_ids: [device_id], play: false }),
+            });
+          } catch {
+            // Non-fatal — the explicit device_id on each play call below
+            // is the real fallback if this transfer call fails.
+          }
         });
 
         player.addListener("not_ready", () => {
@@ -102,7 +119,7 @@ export function useSpotifyPlayer() {
 
   async function playUri(uri: string) {
     if (!deviceId) return;
-    await fetch(
+    const res = await fetch(
       `https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`,
       {
         method: "PUT",
@@ -113,6 +130,20 @@ export function useSpotifyPlayer() {
         body: JSON.stringify({ uris: [uri] }),
       }
     );
+    if (!res.ok && res.status !== 204) {
+      const body = await res.text().catch(() => "");
+      setStatus("error");
+      setErrorMessage(
+        res.status === 404
+          ? "This device dropped off Spotify Connect — tap Reconnect below."
+          : `Couldn't start playback (${res.status}). If Spotify is open elsewhere, close it there and try again.`
+      );
+      console.error("Spotify play failed:", res.status, body);
+    } else if (status === "error") {
+      // Recovered.
+      setStatus("ready");
+      setErrorMessage(null);
+    }
   }
 
   async function pause() {

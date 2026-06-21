@@ -202,7 +202,15 @@ export default function DjPage() {
           </div>
 
           {player.status === "error" && (
-            <p className="text-xs text-rust mt-3">{player.errorMessage}</p>
+            <div className="mt-3 rounded-xl bg-rust/15 px-3 py-2.5">
+              <p className="text-xs text-paper mb-1.5">{player.errorMessage}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="text-xs font-semibold text-paper underline"
+              >
+                Reload this page
+              </button>
+            </div>
           )}
           {player.status === "loading" && (
             <p className="text-xs text-paper/40 mt-3">Connecting player…</p>
