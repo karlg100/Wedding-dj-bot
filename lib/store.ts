@@ -1,14 +1,18 @@
-// Storage abstraction. In production this should be backed by Vercel KV
-// (or any Redis-compatible store) so state is shared across every guest's
-// phone and the DJ device. For local dev, it falls back to an in-memory
-// store so you can run `npm run dev` with zero setup.
+// Storage abstraction. In production this is backed by Upstash Redis
+// (via the Vercel Marketplace "Redis" integration) so state is shared
+// across every guest's phone and the DJ device. For local dev, it falls
+// back to an in-memory store so you can run `npm run dev` with zero setup.
 //
 // To go live on Vercel:
-//   1. Add the Vercel KV (or Upstash Redis) integration to your project.
-//   2. It will set KV_REST_API_URL and KV_REST_API_TOKEN automatically.
-//   3. This file picks that up with no code changes.
+//   1. In your Vercel project, go to Storage -> install a Redis
+//      integration (Upstash is the common choice) -> connect it to
+//      this project.
+//   2. It sets UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (or the
+//      older KV_REST_API_URL / KV_REST_API_TOKEN names) automatically.
+//   3. This file picks either naming up with no code changes — redeploy
+//      after connecting so the new env vars take effect.
 
-import { kv as vercelKv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 
 type Store = {
   get<T>(key: string): Promise<T | null>;
@@ -34,16 +38,28 @@ class MemoryStore implements Store {
 // globalThis, mirroring the usual Next.js pattern for singletons.
 const globalForStore = globalThis as unknown as { __weddingDjStore?: MemoryStore };
 
-function hasKvEnv() {
-  return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+function redisUrl() {
+  return process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || null;
+}
+function redisToken() {
+  return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || null;
+}
+
+let redisClient: Redis | null = null;
+function getRedisClient(): Redis {
+  if (!redisClient) {
+    redisClient = new Redis({ url: redisUrl()!, token: redisToken()! });
+  }
+  return redisClient;
 }
 
 export function getStore(): Store {
-  if (hasKvEnv()) {
+  if (redisUrl() && redisToken()) {
+    const redis = getRedisClient();
     return {
-      get: (key) => vercelKv.get(key),
-      set: (key, value) => vercelKv.set(key, value).then(() => undefined),
-      del: (key) => vercelKv.del(key).then(() => undefined),
+      get: (key) => redis.get(key),
+      set: (key, value) => redis.set(key, value).then(() => undefined),
+      del: (key) => redis.del(key).then(() => undefined),
     };
   }
   if (!globalForStore.__weddingDjStore) {
