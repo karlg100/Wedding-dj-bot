@@ -119,6 +119,18 @@ export function useSpotifyPlayer() {
 
   async function playUri(uri: string) {
     if (!deviceId) return;
+    // iOS Safari (and other mobile browsers) block audio that isn't
+    // triggered by a direct user gesture. activateElement() unlocks the
+    // SDK's underlying <audio> element for this page session — it only
+    // works when called synchronously-ish from inside a real click
+    // handler, which is why this whole function should only ever be
+    // invoked from one (see the DJ page's button onClick).
+    try {
+      await playerRef.current?.activateElement?.();
+    } catch {
+      // Some SDK versions don't have this method, or it's already
+      // unlocked — either way, don't block playback on it.
+    }
     const res = await fetch(
       `https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`,
       {
@@ -150,5 +162,18 @@ export function useSpotifyPlayer() {
     playerRef.current?.pause();
   }
 
-  return { status, deviceId, errorMessage, playUri, pause };
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+
+  async function unlockAudio() {
+    try {
+      await playerRef.current?.activateElement?.();
+      setAudioUnlocked(true);
+    } catch {
+      // Even if this throws, mark it attempted — pressing it again won't
+      // help if the SDK genuinely lacks the method.
+      setAudioUnlocked(true);
+    }
+  }
+
+  return { status, deviceId, errorMessage, audioUnlocked, playUri, pause, unlockAudio };
 }

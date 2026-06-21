@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSpotifyPlayer } from "@/lib/useSpotifyPlayer";
 import { QueueState } from "@/lib/types";
@@ -37,9 +37,20 @@ export default function DjPage() {
     return () => clearInterval(interval);
   }, [refreshQueue]);
 
-  // When a new track becomes "now playing" and the player is ready, play it.
+  // When a new track becomes "now playing" — e.g. picked up via the 4s
+  // poll because another device (admin override, another tab) advanced
+  // the queue — try to play it. This won't reliably produce sound on iOS
+  // Safari since it's not a direct click, but it's the best available
+  // fallback for state changes that don't originate from this device's UI.
+  // lastClickPlayedId avoids re-issuing the same play call this device
+  // already triggered synchronously from the Next track button.
+  const lastClickPlayedId = useRef<string | null>(null);
   useEffect(() => {
-    if (player.status === "ready" && queue?.nowPlaying) {
+    if (
+      player.status === "ready" &&
+      queue?.nowPlaying &&
+      queue.nowPlaying.id !== lastClickPlayedId.current
+    ) {
       player.playUri(queue.nowPlaying.spotifyUri);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,6 +68,15 @@ export default function DjPage() {
 
   async function advance(outcome: "played" | "skipped") {
     setAdvancing(true);
+    // Play directly inside this click handler (not via a useEffect after
+    // state settles) — iOS Safari requires audio to start from a real,
+    // synchronous user gesture or it silently blocks sound while still
+    // reporting success everywhere else.
+    const upcoming = queue?.upNext[0];
+    if (upcoming) {
+      lastClickPlayedId.current = upcoming.id;
+      player.playUri(upcoming.spotifyUri);
+    }
     try {
       const res = await fetch("/api/queue/advance", {
         method: "POST",
@@ -120,6 +140,15 @@ export default function DjPage() {
             </Link>
           </div>
         </header>
+
+        {player.status === "ready" && !player.audioUnlocked && (
+          <button
+            onClick={() => player.unlockAudio()}
+            className="w-full mb-6 rounded-2xl bg-blush text-ink font-semibold py-3.5 px-4 text-sm rise-in"
+          >
+            🔊 Tap once to enable sound on this device
+          </button>
+        )}
 
         {/* Phase selector */}
         <div className="mb-7 -mx-5 px-5 overflow-x-auto">
