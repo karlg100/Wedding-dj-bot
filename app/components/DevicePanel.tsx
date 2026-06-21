@@ -117,8 +117,10 @@ export function DevicePanel({
 
       {devices.length > 0 && (
         <div className="mt-4 pt-3 border-t border-ink/8">
-          <p className="text-xs text-ink/40 mb-2">All devices Spotify currently sees:</p>
-          <ul className="space-y-1.5">
+          <p className="text-xs text-ink/40 mb-2">
+            All devices Spotify currently sees (closed tabs may linger briefly before clearing themselves):
+          </p>
+          <ul className="space-y-1.5 max-h-40 overflow-y-auto">
             {devices.map((d) => (
               <li key={d.id} className="flex items-center justify-between text-xs">
                 <span className="text-ink/70">

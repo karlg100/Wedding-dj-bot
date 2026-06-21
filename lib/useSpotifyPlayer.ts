@@ -27,14 +27,35 @@ type PlaybackState = {
 // they can see playback state (Spotify broadcasts state to all Connect
 // devices watching the same account) without fighting over which one
 // actually outputs audio.
+// A short, human-friendly suffix so multiple devices are distinguishable
+// in the device picker (e.g. "Wedding DJ — Karl's iPhone — 4f2a"),
+// generated ONCE per browser and persisted, not regenerated on every page
+// load — otherwise every reload registers as a brand-new Spotify Connect
+// device and old ones linger as ghosts until Spotify times them out.
+const DEVICE_NAME_KEY = "wedding-dj-device-name";
+
+function getOrCreateStableDeviceName(): string {
+  if (typeof window === "undefined") return "Wedding DJ";
+  try {
+    const existing = localStorage.getItem(DEVICE_NAME_KEY);
+    if (existing) return existing;
+    const platform =
+      typeof navigator !== "undefined" && navigator.platform ? navigator.platform : "device";
+    const suffix = Math.random().toString(36).slice(2, 6);
+    const name = `Wedding DJ — ${platform} — ${suffix}`;
+    localStorage.setItem(DEVICE_NAME_KEY, name);
+    return name;
+  } catch {
+    // localStorage unavailable (private mode, etc) — fall back to a
+    // session-only name rather than crashing.
+    return `Wedding DJ — ${Math.random().toString(36).slice(2, 6)}`;
+  }
+}
+
 export function useSpotifyPlayer(speakerDeviceId: string | null) {
   const [status, setStatus] = useState<PlayerStatus>("idle");
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [deviceName] = useState<string>(() =>
-    typeof navigator !== "undefined"
-      ? `Wedding DJ — ${navigator.platform || "device"} ${Math.floor(Math.random() * 900 + 100)}`
-      : "Wedding DJ"
-  );
+  const [deviceName] = useState<string>(getOrCreateStableDeviceName);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackState | null>(null);
   const playerRef = useRef<any>(null);
