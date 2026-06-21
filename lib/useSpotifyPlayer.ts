@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 declare global {
   interface Window {
@@ -18,13 +18,31 @@ type PlaybackState = {
   trackUri: string | null;
 };
 
-export function useSpotifyPlayer() {
+// `speakerDeviceId` is the server-designated speaker (from queue state).
+// Every device initializes its own Web Playback SDK instance — that's what
+// makes it eligible to ever become the speaker — but only issues real
+// playback commands against the SPEAKER's Spotify Connect device id, and
+// only auto-claims the Connect "active device" role for itself if it IS
+// the designated speaker. Non-speaker devices stay connected but passive:
+// they can see playback state (Spotify broadcasts state to all Connect
+// devices watching the same account) without fighting over which one
+// actually outputs audio.
+export function useSpotifyPlayer(speakerDeviceId: string | null) {
   const [status, setStatus] = useState<PlayerStatus>("idle");
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [deviceName] = useState<string>(() =>
+    typeof navigator !== "undefined"
+      ? `Wedding DJ — ${navigator.platform || "device"} ${Math.floor(Math.random() * 900 + 100)}`
+      : "Wedding DJ"
+  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackState | null>(null);
   const playerRef = useRef<any>(null);
   const tokenRef = useRef<string | null>(null);
+  const isSpeakerRef = useRef(false);
+
+  const isSpeaker = Boolean(deviceId && speakerDeviceId && deviceId === speakerDeviceId);
+  isSpeakerRef.current = isSpeaker;
 
   useEffect(() => {
     let cancelled = false;
@@ -62,9 +80,8 @@ export function useSpotifyPlayer() {
 
       window.onSpotifyWebPlaybackSDKReady = () => {
         const player = new window.Spotify.Player({
-          name: "Wedding DJ",
+          name: deviceName,
           getOAuthToken: async (cb: (token: string) => void) => {
-            // Refresh on each request to stay valid through a long event.
             const r = await fetch("/api/auth/refresh");
             const d = await r.json();
             tokenRef.current = d.accessToken;
@@ -73,27 +90,15 @@ export function useSpotifyPlayer() {
           volume: 0.8,
         });
 
-        player.addListener("ready", async ({ device_id }: { device_id: string }) => {
+        player.addListener("ready", ({ device_id }: { device_id: string }) => {
           if (cancelled) return;
           setDeviceId(device_id);
           setStatus("ready");
-          // Actively claim this browser tab as the active Spotify Connect
-          // device, so playback doesn't stay routed to whatever device
-          // (e.g. the native app) was last active. Don't auto-start
-          // playback (play: false) — just take over the speaker role.
-          try {
-            await fetch("https://api.spotify.com/v1/me/player", {
-              method: "PUT",
-              headers: {
-                Authorization: `Bearer ${tokenRef.current}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ device_ids: [device_id], play: false }),
-            });
-          } catch {
-            // Non-fatal — the explicit device_id on each play call below
-            // is the real fallback if this transfer call fails.
-          }
+          // Deliberately NOT auto-claiming the active Connect device here.
+          // Claiming only happens when this device is explicitly assigned
+          // as the speaker (see the effect below) — otherwise every open
+          // tab would fight over the speaker role, which is exactly the
+          // multi-device confusion this whole design avoids.
         });
 
         player.addListener("not_ready", () => {
@@ -118,13 +123,13 @@ export function useSpotifyPlayer() {
             setErrorMessage(message);
           }
         });
-        player.addListener("authentication_error", ({ message }: { message: string }) => {
+        player.addListener("authentication_error", () => {
           if (!cancelled) {
             setStatus("error");
             setErrorMessage("Spotify session expired. Reconnect on this device.");
           }
         });
-        player.addListener("account_error", ({ message }: { message: string }) => {
+        player.addListener("account_error", () => {
           if (!cancelled) {
             setStatus("error");
             setErrorMessage("This needs Spotify Premium to control playback.");
@@ -135,7 +140,6 @@ export function useSpotifyPlayer() {
         playerRef.current = player;
       };
 
-      // If the script already loaded before this effect ran, fire manually.
       if (window.Spotify && window.onSpotifyWebPlaybackSDKReady) {
         window.onSpotifyWebPlaybackSDKReady();
       }
@@ -146,74 +150,117 @@ export function useSpotifyPlayer() {
       cancelled = true;
       playerRef.current?.disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // If THIS device just became the designated speaker (e.g. someone tapped
+  // "Make this the speaker" on it, or it reloaded while already assigned),
+  // claim the Spotify Connect active-device role. play:false so it doesn't
+  // yank audio into starting unexpectedly.
+  useEffect(() => {
+    if (!isSpeaker || !deviceId || !tokenRef.current) return;
+    fetch("https://api.spotify.com/v1/me/player", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${tokenRef.current}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ device_ids: [deviceId], play: false }),
+    }).catch(() => {
+      // Non-fatal — explicit device_id on each command is the fallback.
+    });
+  }, [isSpeaker, deviceId]);
+
+  // All transport commands target the SPEAKER's device id, whether or not
+  // this particular browser tab is the speaker — that's what makes "skip"
+  // on a non-speaker phone actually control the shared output.
+  async function spotifyCommand(path: string, init?: RequestInit) {
+    if (!speakerDeviceId || !tokenRef.current) return null;
+    const res = await fetch(`https://api.spotify.com/v1${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        Authorization: `Bearer ${tokenRef.current}`,
+      },
+    });
+    return res;
+  }
+
   async function playUri(uri: string) {
-    if (!deviceId) return;
+    if (!speakerDeviceId) return;
     // iOS Safari (and other mobile browsers) block audio that isn't
     // triggered by a direct user gesture. activateElement() unlocks the
-    // SDK's underlying <audio> element for this page session — it only
-    // works when called synchronously-ish from inside a real click
-    // handler, which is why this whole function should only ever be
-    // invoked from one (see the DJ page's button onClick).
-    try {
-      await playerRef.current?.activateElement?.();
-    } catch {
-      // Some SDK versions don't have this method, or it's already
-      // unlocked — either way, don't block playback on it.
-    }
-    const res = await fetch(
-      `https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${tokenRef.current}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ uris: [uri] }),
+    // SDK's underlying <audio> element for THIS page session — it only
+    // matters/works on the speaker device, but it's harmless to call
+    // elsewhere too.
+    if (isSpeakerRef.current) {
+      try {
+        await playerRef.current?.activateElement?.();
+      } catch {
+        // No-op — some SDK versions lack this method, or it's unlocked.
       }
-    );
-    if (!res.ok && res.status !== 204) {
+    }
+    const res = await spotifyCommand(`/me/player/play?device_id=${speakerDeviceId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uris: [uri] }),
+    });
+    if (res && !res.ok && res.status !== 204) {
       const body = await res.text().catch(() => "");
       setStatus("error");
       setErrorMessage(
         res.status === 404
-          ? "This device dropped off Spotify Connect — tap Reconnect below."
-          : `Couldn't start playback (${res.status}). If Spotify is open elsewhere, close it there and try again.`
+          ? "The speaker device dropped off Spotify Connect."
+          : `Couldn't start playback (${res.status}).`
       );
       console.error("Spotify play failed:", res.status, body);
-    } else if (status === "error") {
-      // Recovered.
+    } else if (res?.ok && status === "error") {
       setStatus("ready");
       setErrorMessage(null);
     }
   }
 
   async function pause() {
-    await playerRef.current?.pause();
+    if (isSpeakerRef.current) {
+      await playerRef.current?.pause();
+    } else {
+      await spotifyCommand(`/me/player/pause?device_id=${speakerDeviceId}`, { method: "PUT" });
+    }
   }
 
   async function resume() {
-    await playerRef.current?.resume();
+    if (isSpeakerRef.current) {
+      await playerRef.current?.resume();
+    } else {
+      await spotifyCommand(`/me/player/play?device_id=${speakerDeviceId}`, { method: "PUT" });
+    }
   }
 
   async function togglePlay() {
-    await playerRef.current?.togglePlay();
+    if (isSpeakerRef.current) {
+      await playerRef.current?.togglePlay();
+    } else if (playback) {
+      if (playback.isPaused) await resume();
+      else await pause();
+    }
   }
 
   async function seek(positionMs: number) {
-    const clamped = Math.max(0, positionMs);
-    await playerRef.current?.seek(clamped);
+    const clamped = Math.max(0, Math.round(positionMs));
+    if (isSpeakerRef.current) {
+      await playerRef.current?.seek(clamped);
+    } else {
+      await spotifyCommand(
+        `/me/player/seek?position_ms=${clamped}&device_id=${speakerDeviceId}`,
+        { method: "PUT" }
+      );
+    }
   }
 
   async function seekRelative(deltaMs: number) {
-    const state = await playerRef.current?.getCurrentState();
-    if (!state) return;
-    const target = Math.max(
-      0,
-      Math.min(state.duration, state.position + deltaMs)
-    );
-    await playerRef.current?.seek(target);
+    if (!playback) return;
+    const target = Math.max(0, Math.min(playback.durationMs, playback.positionMs + deltaMs));
+    await seek(target);
   }
 
   async function restartTrack() {
@@ -225,17 +272,27 @@ export function useSpotifyPlayer() {
   async function unlockAudio() {
     try {
       await playerRef.current?.activateElement?.();
-      setAudioUnlocked(true);
-    } catch {
-      // Even if this throws, mark it attempted — pressing it again won't
-      // help if the SDK genuinely lacks the method.
+    } finally {
       setAudioUnlocked(true);
     }
   }
 
+  const becomeSpeaker = useCallback(async () => {
+    if (!deviceId) return false;
+    const res = await fetch("/api/speaker", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId, deviceName }),
+    });
+    const data = await res.json();
+    return !data.error;
+  }, [deviceId, deviceName]);
+
   return {
     status,
     deviceId,
+    deviceName,
+    isSpeaker,
     errorMessage,
     audioUnlocked,
     playback,
@@ -247,5 +304,6 @@ export function useSpotifyPlayer() {
     seekRelative,
     restartTrack,
     unlockAudio,
+    becomeSpeaker,
   };
 }

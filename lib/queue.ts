@@ -6,7 +6,9 @@ const QUEUE_KEY = "wedding:queue-state";
 
 export async function getQueueState(): Promise<QueueState> {
   const state = await getStore().get<QueueState>(QUEUE_KEY);
-  return state ?? DEFAULT_QUEUE_STATE;
+  // Merge with defaults so fields added after a deployment was already
+  // storing state (e.g. speakerDeviceId) don't come back as undefined.
+  return state ? { ...DEFAULT_QUEUE_STATE, ...state } : DEFAULT_QUEUE_STATE;
 }
 
 export async function saveQueueState(state: QueueState): Promise<void> {
@@ -76,6 +78,18 @@ export async function reorderQueue(orderedIds: string[]): Promise<QueueState> {
 export async function setVetoKeywords(keywords: string[]): Promise<QueueState> {
   const state = await getQueueState();
   state.vetoKeywords = keywords;
+  await saveQueueState(state);
+  return state;
+}
+
+export async function setSpeakerDevice(
+  deviceId: string,
+  deviceName: string
+): Promise<QueueState> {
+  const state = await getQueueState();
+  state.speakerDeviceId = deviceId;
+  state.speakerDeviceName = deviceName;
+  state.speakerAssignedAt = Date.now();
   await saveQueueState(state);
   return state;
 }

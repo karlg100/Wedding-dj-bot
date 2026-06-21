@@ -38,6 +38,9 @@ export type QueueState = {
   upNext: QueuedTrack[];
   history: QueuedTrack[];
   vetoKeywords: string[]; // couple-controlled banned terms/artists
+  speakerDeviceId: string | null; // the Spotify Connect device designated as THE speaker
+  speakerDeviceName: string | null; // display name, so other devices can show "Speaker: <name>"
+  speakerAssignedAt: number | null;
 };
 
 export type ChatMessage = {
@@ -76,4 +79,7 @@ export const DEFAULT_QUEUE_STATE: QueueState = {
   upNext: [],
   history: [],
   vetoKeywords: [],
+  speakerDeviceId: null,
+  speakerDeviceName: null,
+  speakerAssignedAt: null,
 };

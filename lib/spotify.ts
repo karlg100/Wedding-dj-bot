@@ -180,13 +180,40 @@ export async function getAudioFeatures(
   }
 }
 
-export async function getActiveDeviceId(): Promise<string | null> {
+export type SpotifyDevice = {
+  id: string;
+  name: string;
+  type: string;
+  isActive: boolean;
+};
+
+export async function listDevices(): Promise<SpotifyDevice[]> {
   const res = await spotifyFetch(`/me/player/devices`);
-  if (!res.ok) return null;
+  if (!res.ok) return [];
   const json = await res.json();
-  const devices = json.devices ?? [];
-  const active = devices.find((d: any) => d.is_active) ?? devices[0];
+  return (json.devices ?? []).map((d: any) => ({
+    id: d.id,
+    name: d.name,
+    type: d.type,
+    isActive: Boolean(d.is_active),
+  }));
+}
+
+export async function getActiveDeviceId(): Promise<string | null> {
+  const devices = await listDevices();
+  const active = devices.find((d) => d.isActive) ?? devices[0];
   return active?.id ?? null;
+}
+
+export async function transferPlayback(deviceId: string, play = false) {
+  const res = await spotifyFetch(`/me/player`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_ids: [deviceId], play }),
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Spotify transfer failed: ${await res.text()}`);
+  }
 }
 
 export async function playTrackOnDevice(deviceId: string, uri: string) {

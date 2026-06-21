@@ -6,6 +6,7 @@ import { useSpotifyPlayer } from "@/lib/useSpotifyPlayer";
 import { QueueState } from "@/lib/types";
 import { PHASES, Phase } from "@/lib/types";
 import { SortableQueue } from "@/app/components/SortableQueue";
+import { DevicePanel } from "@/app/components/DevicePanel";
 
 function formatDuration(ms: number) {
   const totalSec = Math.round(ms / 1000);
@@ -18,7 +19,8 @@ export default function DjPage() {
   const [queue, setQueue] = useState<QueueState | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [advancing, setAdvancing] = useState(false);
-  const player = useSpotifyPlayer();
+  const [showDevices, setShowDevices] = useState(false);
+  const player = useSpotifyPlayer(queue?.speakerDeviceId ?? null);
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -70,6 +72,7 @@ export default function DjPage() {
   const lastClickPlayedId = useRef<string | null>(null);
   useEffect(() => {
     if (
+      player.isSpeaker &&
       player.status === "ready" &&
       queue?.nowPlaying &&
       queue.nowPlaying.id !== lastClickPlayedId.current
@@ -77,7 +80,7 @@ export default function DjPage() {
       player.playUri(queue.nowPlaying.spotifyUri);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue?.nowPlaying?.id, player.status]);
+  }, [queue?.nowPlaying?.id, player.status, player.isSpeaker]);
 
   async function setPhase(phase: Phase) {
     const res = await fetch("/api/phase", {
@@ -176,12 +179,35 @@ export default function DjPage() {
             <h1 className="font-display text-3xl">Now spinning</h1>
           </div>
           <div className="flex items-center gap-3">
-            <PlayerStatusDot status={player.status} />
+            <button
+              onClick={() => setShowDevices((s) => !s)}
+              className="flex items-center gap-1.5"
+            >
+              {player.isSpeaker && (
+                <span className="text-[10px] uppercase tracking-wide font-semibold text-espresso bg-blush/40 rounded-full px-2 py-0.5">
+                  Speaker
+                </span>
+              )}
+              <PlayerStatusDot status={player.status} />
+            </button>
             <Link href="/dj/setup" className="text-xs text-ink/40 hover:text-ink/70">
               Setup
             </Link>
           </div>
         </header>
+
+        {showDevices && (
+          <DevicePanel player={player} queue={queue} onSpeakerChanged={refreshQueue} />
+        )}
+
+        {!queue?.speakerDeviceId && player.status === "ready" && !showDevices && (
+          <button
+            onClick={() => setShowDevices(true)}
+            className="w-full mb-6 rounded-2xl bg-ink text-paper font-semibold py-3.5 px-4 text-sm rise-in"
+          >
+            No speaker set yet — tap to choose one
+          </button>
+        )}
 
         {player.status === "ready" && !player.audioUnlocked && (
           <button
