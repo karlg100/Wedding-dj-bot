@@ -24,7 +24,7 @@ export type QueuedTrack = {
   tempo: number | null; // BPM
   requestedBy: string | null; // guest display name, null = backbone/seed track
   requestNote: string | null; // optional message from guest
-  source: "seed" | "request";
+  source: "seed" | "request" | "autofill";
   status: RequestStatus;
   screeningNote: string | null; // why it was placed/flagged, shown in DJ view
   addedAt: number;

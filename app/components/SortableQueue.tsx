@@ -77,7 +77,13 @@ function SortableRow({
         <p className="text-sm font-medium truncate">{track.title}</p>
         <p className="text-xs text-ink/50 truncate">
           {track.artist} · {formatDuration(track.durationMs)}
-          {track.requestedBy ? ` · ${track.requestedBy}` : track.source === "seed" ? " · backbone" : ""}
+          {track.requestedBy
+            ? ` · ${track.requestedBy}`
+            : track.source === "seed"
+            ? " · backbone"
+            : track.source === "autofill"
+            ? " · DJ pick"
+            : ""}
         </p>
       </div>
       <button

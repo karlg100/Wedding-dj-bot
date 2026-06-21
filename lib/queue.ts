@@ -93,3 +93,22 @@ export async function setSpeakerDevice(
   await saveQueueState(state);
   return state;
 }
+
+// Lightweight cooldown so many devices polling at once don't all trigger
+// auto-fill (and therefore many parallel Anthropic + Spotify calls) for
+// the same empty-queue moment. Not a hard distributed lock — good enough
+// for "don't fire this more than once every N seconds," which is all we
+// need here.
+const AUTOFILL_LOCK_KEY = "wedding:autofill-lock";
+const AUTOFILL_COOLDOWN_MS = 25_000;
+
+export async function tryClaimAutoFillSlot(): Promise<boolean> {
+  const store = getStore();
+  const last = await store.get<number>(AUTOFILL_LOCK_KEY);
+  const now = Date.now();
+  if (last && now - last < AUTOFILL_COOLDOWN_MS) {
+    return false;
+  }
+  await store.set(AUTOFILL_LOCK_KEY, now);
+  return true;
+}
