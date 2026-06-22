@@ -1,6 +1,6 @@
 import { getStore } from "./store";
 import { DEFAULT_QUEUE_STATE, PHASES, Phase, QueuedTrack, QueueState } from "./types";
-import { chooseInsertIndex } from "./curation";
+import { chooseInsertIndex, energyFit, bestFitPhase } from "./curation";
 
 const QUEUE_KEY = "wedding:queue-state";
 
@@ -120,7 +120,45 @@ export async function saveQueueState(state: QueueState): Promise<void> {
 export async function setPhase(phase: Phase): Promise<QueueState> {
   const state = await getQueueState();
   state.phase = phase;
+
+  // Phases that come after the new phase — candidates for re-holding requests.
+  const futurePhases = PHASES.slice(phaseIndex(phase) + 1).map((p) => p.id);
+
+  const nextTracks: QueuedTrack[] = [];
+  for (const track of state.upNext) {
+    // Held tracks: leave in place, releaseHeldTracksForCurrentPhase handles them.
+    if (track.status === "held") {
+      nextTracks.push(track);
+      continue;
+    }
+
+    // Autofill / seed filler: discard so autofill regenerates for the new phase.
+    if (track.source !== "request") continue;
+
+    // Guest request: keep if energy fits the new phase, otherwise re-hold.
+    const fit = energyFit(phase, track.energy);
+    if (fit >= 0.5 || track.energy === null) {
+      nextTracks.push(track);
+    } else {
+      const target = bestFitPhase(track.energy, futurePhases);
+      if (target) {
+        nextTracks.push({ ...track, status: "held", holdUntilPhase: target });
+      } else {
+        // No future phase is a better fit — keep in the active queue.
+        nextTracks.push(track);
+      }
+    }
+  }
+
+  state.upNext = nextTracks;
+
+  // Release any held tracks that now belong in the active queue for this phase.
   releaseHeldTracksForCurrentPhase(state);
+
+  // Reset the autofill cooldown so it fires immediately for the new phase
+  // rather than waiting out however much time was left on the old cooldown.
+  await getStore().set(AUTOFILL_LOCK_KEY, 0);
+
   await saveQueueState(state);
   return state;
 }

@@ -51,12 +51,28 @@ const PHASE_ENERGY_TARGET: Record<Phase, [number, number]> = {
   lastcall: [0.1, 0.5],
 };
 
-function energyFit(phase: Phase, energy: number | null): number {
+export function energyFit(phase: Phase, energy: number | null): number {
   if (energy === null) return 0.5; // unknown -> neutral, don't penalize
   const [lo, hi] = PHASE_ENERGY_TARGET[phase];
   if (energy >= lo && energy <= hi) return 1;
   const dist = energy < lo ? lo - energy : energy - hi;
   return Math.max(0, 1 - dist * 2);
+}
+
+// Given an energy level, return the phase from `candidates` that fits it best.
+// Returns null if energy is unknown or candidates is empty.
+export function bestFitPhase(energy: number | null, candidates: Phase[]): Phase | null {
+  if (energy === null || candidates.length === 0) return null;
+  let best: Phase | null = null;
+  let bestScore = -Infinity;
+  for (const phase of candidates) {
+    const score = energyFit(phase, energy);
+    if (score > bestScore) {
+      bestScore = score;
+      best = phase;
+    }
+  }
+  return best;
 }
 
 // Decide where to insert a newly-accepted request into the upcoming queue.
