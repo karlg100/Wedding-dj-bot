@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local dev store (Spotify tokens / queue state when no Redis configured)
+.local-store.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
