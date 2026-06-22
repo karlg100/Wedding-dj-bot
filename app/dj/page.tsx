@@ -82,13 +82,41 @@ export default function DjPage() {
 
     if (!unlocked) return () => { cancelled = true; };
     checkConnection();
-    refreshQueue();
-    const interval = setInterval(refreshQueue, 4000);
+
+    // Real-time state sync via Server-Sent Events. The server streams a new
+    // QueueState payload whenever anything changes (phase, nowPlaying, queue
+    // order, speaker assignment, etc.). EventSource reconnects automatically
+    // when the connection closes (e.g. after the server's 25s TTL), so this
+    // self-heals without any polling loop here.
+    let source: EventSource | null = null;
+
+    function connectSSE() {
+      if (cancelled) return;
+      source = new EventSource("/api/events");
+
+      source.onmessage = (e) => {
+        if (cancelled) return;
+        try {
+          setQueue(JSON.parse(e.data));
+        } catch {}
+      };
+
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        // Back-off before reconnecting so a transient server error doesn't
+        // hammer the endpoint.
+        if (!cancelled) setTimeout(connectSSE, 2_000);
+      };
+    }
+
+    connectSSE();
+
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      source?.close();
     };
-  }, [refreshQueue, unlocked]);
+  }, [unlocked]);
 
   // When a new track becomes "now playing" — e.g. picked up via the 4s
   // poll because another device (admin override, another tab) advanced
