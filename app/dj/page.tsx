@@ -118,18 +118,27 @@ export default function DjPage() {
     };
   }, [unlocked]);
 
-  // When a new track becomes "now playing" — e.g. picked up via the 4s
-  // poll because another device (admin override, another tab) advanced
-  // the queue — try to play it. This won't reliably produce sound on iOS
-  // Safari since it's not a direct click, but it's the best available
-  // fallback for state changes that don't originate from this device's UI.
-  // lastClickPlayedId avoids re-issuing the same play call this device
-  // already triggered synchronously from the Next track button.
+  // When a new track becomes "now playing" — e.g. picked up via SSE because
+  // another device (admin override, another tab) advanced the queue — try to
+  // play it. This won't reliably produce sound on iOS Safari since it's not a
+  // direct click, but it's the best available fallback for state changes that
+  // don't originate from this device's UI.
+  // lastClickPlayedId avoids re-issuing the same play call this device already
+  // triggered synchronously from the Next track button.
+  //
+  // IMPORTANT: We also gate on player.deviceId === queue.speakerDeviceId.
+  // On page reload, the Spotify SDK issues a brand-new device_id. The speaker
+  // registration effect (in useSpotifyPlayer) updates Redis with the fresh id,
+  // and SSE delivers that back here. Until the ids match we must NOT attempt
+  // playback — Spotify would return 404 for the stale device_id and show the
+  // "dropped off Connect" error even though the speaker is fine.
   const lastClickPlayedId = useRef<string | null>(null);
   useEffect(() => {
     if (
       player.isSpeaker &&
       player.status === "ready" &&
+      player.deviceId !== null &&
+      player.deviceId === queue?.speakerDeviceId && // ids in sync — safe to play
       queue?.nowPlaying &&
       queue.nowPlaying.id !== lastClickPlayedId.current
     ) {
@@ -137,7 +146,7 @@ export default function DjPage() {
       player.playUri(queue.nowPlaying.spotifyUri, resumeAt ?? undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue?.nowPlaying?.id, player.status, player.isSpeaker]);
+  }, [queue?.nowPlaying?.id, queue?.speakerDeviceId, player.status, player.isSpeaker, player.deviceId]);
 
   // Auto-advance when a track ends naturally. The Spotify SDK fires
   // player_state_changed with paused=true and position=0 when a track
