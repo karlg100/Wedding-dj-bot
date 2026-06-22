@@ -29,7 +29,7 @@ music never stops.
 
 ```
 npm install
-npm run dev       # local dev — falls back to in-memory store if no Redis env vars set
+npm run dev       # local dev — falls back to a file store (.local-store.json) if no Redis env vars set
 npm run build     # production build, always run this before considering a change done
 ```
 
@@ -46,10 +46,27 @@ localhost).
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | developer.spotify.com/dashboard — redirect URI must be `https://wedding-dj-bot.vercel.app/api/auth/callback` |
 | `ANTHROPIC_API_KEY` | console.anthropic.com |
 | `ADMIN_PASSCODE` | self-chosen, gates `/admin` |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (or legacy `KV_REST_API_URL`/`KV_REST_API_TOKEN`) | auto-set by Vercel's "Redis" marketplace integration once connected to the project — both naming schemes are supported in code |
+| Redis (one of the sets below) | Vercel Storage → Redis integration → **Connect to Project** |
 
-All four categories are already configured in the live Vercel project.
-This list is for reference if redeploying elsewhere.
+For Redis, `lib/store.ts` accepts whichever credentials the integration
+injects, checked in this order:
+1. `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (Upstash REST API,
+   via `@upstash/redis`)
+2. `KV_REST_API_URL` + `KV_REST_API_TOKEN` (legacy KV names, same REST client)
+3. `REDIS_URL` or `KV_URL` — a `redis://`/`rediss://` connection string,
+   used via `ioredis`. **This is what the current live project uses**:
+   Vercel's native Redis integration provides only `REDIS_URL`, not the
+   REST pair.
+
+If none are present, the app silently falls back to a local file store
+(`.local-store.json`) — fine for `npm run dev`, but on a serverless deploy
+it means the token is lost on every redeploy/cold start (see Decision Log
+#8).
+
+**Diagnostic:** `GET /api/auth/refresh` returns a `store` field —
+`"redis"` (persistent) or `"file"` (ephemeral fallback). Open
+`https://wedding-dj-bot.vercel.app/api/auth/refresh` to confirm production
+is actually on Redis.
 
 ## Pages
 
@@ -219,6 +236,24 @@ something already fixed:
    snapshot matches the currently-playing track, resumes there
    (extrapolating elapsed time, capped at 5 minutes of staleness)
    instead of starting over.
+
+8. **Production lost the Spotify login on every redeploy (had to re-auth
+   repeatedly).** Root cause: two compounding issues. (a) The Redis
+   database existed in Vercel but was never **Connect to Project**'d, so
+   no Redis env vars were injected and production silently used the
+   ephemeral file/in-memory store — wiped on every redeploy and not
+   shared across serverless instances. (b) Even once connected, Vercel's
+   native Redis integration provides only a `REDIS_URL` connection
+   string, which the `@upstash/redis` REST client can't use.
+   Fix: connect the DB to the project, and teach `lib/store.ts` to use
+   `ioredis` against `REDIS_URL`/`KV_URL` when the REST pair is absent
+   (it still prefers REST creds if present). Added a `store` field to
+   `/api/auth/refresh` (`"redis"` vs `"file"`) so this is diagnosable at a
+   glance. Also made the local-dev fallback file-backed
+   (`.local-store.json`, gitignored) so `npm run dev` restarts no longer
+   force a re-login either. Note: `ioredis` keeps a TCP connection rather
+   than using Upstash REST — fine at wedding-day scale, but verify
+   `"store":"redis"` after a deploy.
 
 ## Safety/product constraints — please preserve these
 

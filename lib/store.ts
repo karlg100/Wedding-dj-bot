@@ -4,15 +4,18 @@
 // back to an in-memory store so you can run `npm run dev` with zero setup.
 //
 // To go live on Vercel:
-//   1. In your Vercel project, go to Storage -> install a Redis
-//      integration (Upstash is the common choice) -> connect it to
-//      this project.
-//   2. It sets UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (or the
-//      older KV_REST_API_URL / KV_REST_API_TOKEN names) automatically.
-//   3. This file picks either naming up with no code changes — redeploy
-//      after connecting so the new env vars take effect.
+//   1. In your Vercel project, go to Storage -> add a Redis integration
+//      -> **Connect to Project** (this is the step that actually injects
+//      the env vars; just creating the database does nothing on its own).
+//   2. Redeploy so the new env vars take effect.
+// This file supports whichever credentials the integration provides:
+//   - REST: UPSTASH_REDIS_REST_URL/TOKEN or KV_REST_API_URL/TOKEN (used
+//     via @upstash/redis), OR
+//   - a connection string: REDIS_URL or KV_URL (used via ioredis).
+//   Vercel's native Redis integration provides only REDIS_URL.
 
-import { Redis } from "@upstash/redis";
+import { Redis as UpstashRedis } from "@upstash/redis";
+import IORedis from "ioredis";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 
@@ -81,44 +84,109 @@ class FileStore implements Store {
   }
 }
 
-// A single instance survives across hot-reloads in dev via globalThis,
-// mirroring the usual Next.js pattern for singletons.
-const globalForStore = globalThis as unknown as { __weddingDjStore?: FileStore };
+// JSON-serializing store over a standard redis:// connection (ioredis).
+// Used when the integration only exposes a REDIS_URL connection string
+// (e.g. Vercel's native Redis / Upstash TCP endpoint) rather than the
+// REST URL+token pair the @upstash/redis client needs. ioredis values are
+// plain strings, so we JSON-encode on write and decode on read to keep the
+// same object-in/object-out contract as the other backends.
+class RedisUrlStore implements Store {
+  constructor(private readonly client: IORedis) {}
 
-function redisUrl() {
+  async get<T>(key: string): Promise<T | null> {
+    const raw = await this.client.get(key);
+    if (raw == null) return null;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      // Value wasn't JSON (shouldn't happen for our own writes) — return raw.
+      return raw as unknown as T;
+    }
+  }
+  async set<T>(key: string, value: T): Promise<void> {
+    await this.client.set(key, JSON.stringify(value));
+  }
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
+  }
+}
+
+// Single instances survive across hot-reloads in dev (and warm serverless
+// invocations) via globalThis, mirroring the usual Next.js singleton
+// pattern — and, for ioredis, avoiding opening a new TCP connection per
+// invocation.
+const globalForStore = globalThis as unknown as {
+  __weddingDjStore?: FileStore;
+  __weddingDjRedis?: IORedis;
+};
+
+// REST credentials (Upstash REST API). Preferred for serverless when
+// available, but Vercel's native Redis integration may not provide them.
+function restUrl() {
   return process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || null;
 }
-function redisToken() {
+function restToken() {
   return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || null;
 }
+// Standard redis:// (or rediss://) connection string. This is what the
+// Vercel Redis marketplace integration injects as REDIS_URL.
+function redisConnUrl() {
+  return process.env.REDIS_URL || process.env.KV_URL || null;
+}
 
-let redisClient: Redis | null = null;
-function getRedisClient(): Redis {
-  if (!redisClient) {
-    redisClient = new Redis({ url: redisUrl()!, token: redisToken()! });
+let upstashClient: UpstashRedis | null = null;
+function getUpstashClient(): UpstashRedis {
+  if (!upstashClient) {
+    upstashClient = new UpstashRedis({ url: restUrl()!, token: restToken()! });
   }
-  return redisClient;
+  return upstashClient;
+}
+
+function getIORedisClient(): IORedis {
+  if (!globalForStore.__weddingDjRedis) {
+    // ioredis parses rediss:// (TLS) and redis:// from the URL itself.
+    // Cap retries so a bad URL surfaces as an error instead of hanging
+    // every request forever.
+    const client = new IORedis(redisConnUrl()!, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: false,
+    });
+    // Without an 'error' listener, ioredis connection errors bubble up as
+    // unhandled EventEmitter errors and can crash the function. Log instead;
+    // individual command failures still reject their own promises.
+    client.on("error", (err) => {
+      console.error("[store] Redis connection error:", err?.message ?? err);
+    });
+    globalForStore.__weddingDjRedis = client;
+  }
+  return globalForStore.__weddingDjRedis;
 }
 
 export function getStore(): Store {
-  if (redisUrl() && redisToken()) {
-    const redis = getRedisClient();
+  // 1. Upstash REST (URL + token) — ideal for serverless if present.
+  if (restUrl() && restToken()) {
+    const redis = getUpstashClient();
     return {
       get: (key) => redis.get(key),
       set: (key, value) => redis.set(key, value).then(() => undefined),
       del: (key) => redis.del(key).then(() => undefined),
     };
   }
+  // 2. Standard redis:// connection string (Vercel native Redis / REDIS_URL).
+  if (redisConnUrl()) {
+    return new RedisUrlStore(getIORedisClient());
+  }
+  // 3. Local-dev fallback: file-backed store.
   if (!globalForStore.__weddingDjStore) {
     globalForStore.__weddingDjStore = new FileStore(LOCAL_STORE_FILE);
   }
   return globalForStore.__weddingDjStore;
 }
 
-// Which backend is actually live. "redis" = persistent across deploys.
-// "file" = local-dev fallback (a serverless deploy reporting "file" means
-// the Redis env vars aren't reaching the runtime — that alone explains
-// losing the Spotify token on every redeploy).
+// Which backend is actually live. "redis" = persistent across deploys
+// (either REST or a REDIS_URL connection). "file" = local-dev fallback;
+// a serverless deploy reporting "file" means no Redis env var is reaching
+// the runtime, which alone explains losing the Spotify token on redeploy.
 export function getStoreBackend(): "redis" | "file" {
-  return redisUrl() && redisToken() ? "redis" : "file";
+  return (restUrl() && restToken()) || redisConnUrl() ? "redis" : "file";
 }
