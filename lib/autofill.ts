@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getQueueState, addToQueue, tryClaimAutoFillSlot } from "./queue";
+import { getQueueState, addToQueue, tryClaimAutoFillSlot, getTasteList } from "./queue";
 import { searchTracks, getAudioFeatures } from "./spotify";
 import { screenTrack, phaseDescription } from "./curation";
 import { QueuedTrack } from "./types";
@@ -78,13 +78,26 @@ export async function maybeAutoFillQueue(): Promise<{ added: number } | null> {
   const claimed = await tryClaimAutoFillSlot();
   if (!claimed) return null;
 
-  const tasteSeed = Array.from(
-    new Set(
-      [...state.upNext, ...state.history]
-        .filter((t) => t.source === "seed")
-        .map((t) => `${t.title} by ${t.artist}`)
-    )
-  ).slice(0, 25);
+  // Primary taste signal is the couple's dedicated taste list (their
+  // reference playlist). Fall back to any seed-source tracks in the
+  // queue/history if no taste list has been set. Sample a rotating
+  // subset so the AI isn't anchored to the same handful every time.
+  const tasteList = await getTasteList();
+  let tastePool: string[];
+  if (tasteList.length > 0) {
+    tastePool = tasteList;
+  } else {
+    tastePool = Array.from(
+      new Set(
+        [...state.upNext, ...state.history]
+          .filter((t) => t.source === "seed")
+          .map((t) => `${t.title} by ${t.artist}`)
+      )
+    );
+  }
+  // Shuffle and take up to 30, so across the night the AI sees variety
+  // from the full list rather than always the first entries.
+  const tasteSeed = [...tastePool].sort(() => Math.random() - 0.5).slice(0, 30);
 
   const recentlyPlayed = state.history.slice(0, 12).map((t) => `${t.title} by ${t.artist}`);
   const currentlyQueued = state.upNext.map((t) => `${t.title} by ${t.artist}`);

@@ -38,6 +38,7 @@ export type QueueState = {
   upNext: QueuedTrack[];
   history: QueuedTrack[];
   vetoKeywords: string[]; // couple-controlled banned terms/artists
+  tasteSeed: string[]; // "Title - Artist" lines; pure taste reference for AI auto-fill, never auto-queued
   speakerDeviceId: string | null; // the Spotify Connect device designated as THE speaker
   speakerDeviceName: string | null; // display name, so other devices can show "Speaker: <name>"
   speakerAssignedAt: number | null;
@@ -79,6 +80,7 @@ export const DEFAULT_QUEUE_STATE: QueueState = {
   upNext: [],
   history: [],
   vetoKeywords: [],
+  tasteSeed: [],
   speakerDeviceId: null,
   speakerDeviceName: null,
   speakerAssignedAt: null,

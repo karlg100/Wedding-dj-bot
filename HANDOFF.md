@@ -110,12 +110,29 @@ This list is for reference if redeploying elsewhere.
   passed into any tool result the guest-facing AI receives. If you add
   new tools here, preserve that boundary.
 - `lib/autofill.ts` — when `upNext.length < 3`, asks Claude to pick
-  wedding-appropriate songs (using the backbone list as a *taste seed*,
+  wedding-appropriate songs (using the **taste list** as a *taste seed*,
   not a literal playlist — Karl was explicit about this distinction),
   searches Spotify, screens, and queues them. Tagged `source: "autofill"`
   in the queue so it's visually distinguishable from guest requests and
   backbone tracks. Has a 25s cooldown lock (`tryClaimAutoFillSlot`) so
   many devices polling simultaneously don't all trigger it at once.
+
+**Taste list vs. backbone queue — important distinction**
+There are two separate concepts, easily confused:
+- **Taste list** (`getTasteList`/`setTasteList` in `lib/queue.ts`, stored
+  at Redis key `wedding:taste-list`, edited in the "Your music taste"
+  section of `/dj/setup`, API at `/api/taste`): the couple's reference
+  songs. These are NEVER queued to play. They're fed into the auto-fill
+  AI prompt as taste inspiration. This is the primary thing Karl wanted —
+  his 76-song Apple Music playlist lives here as a *seed for the AI's
+  judgment*, not a playlist that plays in order.
+- **Backbone seed** (`/api/queue/seed`, "Queue songs now" section of
+  setup): the older flow that matches songs against Spotify and pushes
+  them straight into the live `upNext` queue to actually play. Now
+  reframed as an optional "queue specific songs immediately" tool.
+- Karl's actual 76-song list is saved in the repo at `mk-seed-list.txt`
+  (cleaned: title - artist per line) — it's meant for the **taste list**,
+  not the backbone queue.
 
 **UI components**
 - `app/components/SortableQueue.tsx` — drag-to-reorder queue list
@@ -226,15 +243,14 @@ something already fixed:
 
 ## Outstanding / next steps
 
-1. **Seed the real backbone playlist.** Karl has a 76-song Apple Music
-   playlist ("M and K" by DJ Catarrhini — country-leaning: Rodney
-   Atkins, Tim McGraw, Dierks Bentley, Kenny Chesney, Jake Owen, Nelly,
-   etc.) at
-   `https://music.apple.com/us/playlist/m-and-k/pl.u-8aPz1sG4127`.
-   Apple Music's web player doesn't expose the full tracklist to
-   automated fetches — Karl is pasting it in manually from his Mac. Once
-   pasted, run it through `/dj/setup`'s "Add to backbone queue" flow,
-   which matches each title against Spotify and seeds the queue.
+1. **Load the taste list.** Karl's 76-song Apple Music playlist ("M and
+   K" — country-leaning: Rodney Atkins, Tim McGraw, Dierks Bentley,
+   Kenny Chesney, Jake Owen, Luke Bryan, plus pop/dance: Bruno Mars,
+   Avicii, One Direction, etc.) has been extracted into
+   `mk-seed-list.txt` in the repo. Paste its contents into the "Your
+   music taste" box at `/dj/setup` and save — this stores it as the
+   taste seed for the auto-fill AI (it does NOT queue the songs to play).
+   Confirm it saved (the page shows a count).
 2. **Final live end-to-end test** with multiple real guest phones
    simultaneously hitting `/guest`, to confirm the chat + queue holds up
    under concurrent use.

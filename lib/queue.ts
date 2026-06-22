@@ -82,6 +82,13 @@ export async function setVetoKeywords(keywords: string[]): Promise<QueueState> {
   return state;
 }
 
+export async function setTasteSeed(seed: string[]): Promise<QueueState> {
+  const state = await getQueueState();
+  state.tasteSeed = seed;
+  await saveQueueState(state);
+  return state;
+}
+
 export async function setSpeakerDevice(
   deviceId: string,
   deviceName: string
@@ -111,4 +118,21 @@ export async function tryClaimAutoFillSlot(): Promise<boolean> {
   }
   await store.set(AUTOFILL_LOCK_KEY, now);
   return true;
+}
+
+// The "taste list" — the couple's reference songs (e.g. their Apple Music
+// playlist) used ONLY as inspiration for the auto-fill AI's picks. These
+// are deliberately NOT queued to play; they shape what Claude chooses
+// when the queue runs low. Stored separately from QueueState so it
+// persists independently of queue churn.
+const TASTE_LIST_KEY = "wedding:taste-list";
+
+export async function getTasteList(): Promise<string[]> {
+  return (await getStore().get<string[]>(TASTE_LIST_KEY)) ?? [];
+}
+
+export async function setTasteList(entries: string[]): Promise<string[]> {
+  const cleaned = entries.map((e) => e.trim()).filter(Boolean);
+  await getStore().set(TASTE_LIST_KEY, cleaned);
+  return cleaned;
 }

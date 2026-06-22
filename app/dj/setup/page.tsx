@@ -12,13 +12,42 @@ export default function SetupPage() {
   const [vetoText, setVetoText] = useState("");
   const [savingVeto, setSavingVeto] = useState(false);
   const [vetoSaved, setVetoSaved] = useState(false);
+  const [tasteText, setTasteText] = useState("");
+  const [savingTaste, setSavingTaste] = useState(false);
+  const [tasteCount, setTasteCount] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/queue", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setVetoText((d.vetoKeywords ?? []).join("\n")))
       .catch(() => {});
+    fetch("/api/taste", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        setTasteText((d.taste ?? []).join("\n"));
+        setTasteCount((d.taste ?? []).length || null);
+      })
+      .catch(() => {});
   }, []);
+
+  async function saveTaste() {
+    setSavingTaste(true);
+    try {
+      const entries = tasteText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const res = await fetch("/api/taste", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries }),
+      });
+      const data = await res.json();
+      setTasteCount(data.count ?? entries.length);
+    } finally {
+      setSavingTaste(false);
+    }
+  }
 
   async function seedPlaylist() {
     const queries = playlistText
@@ -72,13 +101,45 @@ export default function SetupPage() {
         </p>
         <h1 className="font-display text-4xl mb-8">Before the day</h1>
 
-        {/* Seed playlist */}
+        {/* Taste list — primary */}
         <section className="mb-10">
-          <h2 className="font-display text-xl mb-2">Backbone playlist</h2>
+          <h2 className="font-display text-xl mb-2">Your music taste</h2>
           <p className="text-sm text-ink/60 mb-3 leading-relaxed">
-            Paste songs from your Apple Music playlist, one per line — title and
-            artist works best (e.g. <span className="italic">Sweet Caroline Neil Diamond</span>).
-            These play whenever the request queue runs dry.
+            Paste your reference playlist here, one song per line (title and
+            artist, e.g. <span className="italic">These Are My People - Rodney Atkins</span>).
+            These songs are <span className="font-medium">not</span> queued to play
+            directly — they tell the DJ what you two like, so when nobody&rsquo;s
+            requesting anything, it picks songs in this spirit.
+          </p>
+          <textarea
+            value={tasteText}
+            onChange={(e) => setTasteText(e.target.value)}
+            rows={10}
+            placeholder={"These Are My People - Rodney Atkins\nBarefoot Blue Jean Night - Jake Owen\nTreasure - Bruno Mars"}
+            className="w-full rounded-2xl border border-ink/15 bg-white px-4 py-3.5 text-sm font-mono leading-relaxed outline-none focus:border-ink transition-colors mb-3"
+          />
+          <button
+            onClick={saveTaste}
+            disabled={savingTaste || !tasteText.trim()}
+            className="rounded-full bg-ink text-paper font-semibold py-3 px-6 text-sm hover:opacity-90 transition-colors disabled:opacity-40"
+          >
+            {savingTaste ? "Saving…" : "Save taste list"}
+          </button>
+          {tasteCount !== null && (
+            <span className="ml-3 text-sm" style={{ color: "var(--greige-deep)" }}>
+              {tasteCount} songs saved.
+            </span>
+          )}
+        </section>
+
+        {/* Optional: queue songs immediately */}
+        <section className="mb-10">
+          <h2 className="font-display text-xl mb-2">Queue songs now (optional)</h2>
+          <p className="text-sm text-ink/60 mb-3 leading-relaxed">
+            Only if you want specific songs lined up to play immediately —
+            paste them here and they&rsquo;ll be matched against Spotify and added
+            straight to the live queue. Most of the time you can leave this
+            empty and let requests plus the taste list above drive things.
           </p>
           <textarea
             value={playlistText}
