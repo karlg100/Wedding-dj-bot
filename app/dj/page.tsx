@@ -88,6 +88,44 @@ export default function DjPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue?.nowPlaying?.id, player.status, player.isSpeaker]);
 
+  // Auto-advance when a track ends naturally. The Spotify SDK fires
+  // player_state_changed with paused=true and position=0 when a track
+  // finishes — distinct from the user pausing (position stays wherever
+  // they paused) or seeking to 0 (position resets but isPaused=false if
+  // playing, or prev.isPaused was already true so the gate fails).
+  // Only the speaker device triggers this so multiple open tabs don't
+  // race to advance. We deliberately do NOT call playUri() here — the
+  // useEffect above fires when queue.nowPlaying.id changes and handles it,
+  // which is consistent with how other-device advances (admin, other tabs)
+  // are already handled and avoids duplicating the iOS gesture workaround.
+  const prevPlaybackRef = useRef<typeof player.playback>(null);
+  const autoAdvancingRef = useRef(false);
+  useEffect(() => {
+    const prev = prevPlaybackRef.current;
+    const curr = player.playback;
+    prevPlaybackRef.current = curr;
+
+    if (!player.isSpeaker || !curr || !prev || autoAdvancingRef.current) return;
+
+    const wasPlayingIntoTrack = !prev.isPaused && prev.positionMs > 5000;
+    const isNowResetToStart = curr.isPaused && curr.positionMs < 2000;
+    const sameTrack = prev.trackUri === curr.trackUri && curr.trackUri !== null;
+
+    if (wasPlayingIntoTrack && isNowResetToStart && sameTrack) {
+      autoAdvancingRef.current = true;
+      fetch("/api/queue/advance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outcome: "played" }),
+      })
+        .then((r) => r.json())
+        .then((data) => setQueue(data))
+        .catch(console.error)
+        .finally(() => { autoAdvancingRef.current = false; });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.playback]);
+
   async function setPhase(phase: Phase) {
     const res = await fetch("/api/phase", {
       method: "POST",
