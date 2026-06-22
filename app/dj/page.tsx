@@ -75,6 +75,8 @@ export default function DjPage() {
   // lastClickPlayedId avoids re-issuing the same play call this device
   // already triggered synchronously from the Next track button.
   const lastClickPlayedId = useRef<string | null>(null);
+  const autoAdvanceInFlightRef = useRef(false);
+  const lastPlaybackRef = useRef<ReturnType<typeof useSpotifyPlayer>["playback"]>(null);
   useEffect(() => {
     if (
       player.isSpeaker &&
@@ -87,6 +89,65 @@ export default function DjPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue?.nowPlaying?.id, player.status, player.isSpeaker]);
+
+  useEffect(() => {
+    const currentPlayback = player.playback;
+    const previousPlayback = lastPlaybackRef.current;
+    lastPlaybackRef.current = currentPlayback;
+
+    if (
+      !player.isSpeaker ||
+      player.status !== "ready" ||
+      !queue?.nowPlaying ||
+      !currentPlayback ||
+      !previousPlayback ||
+      autoAdvanceInFlightRef.current
+    ) {
+      return;
+    }
+
+    const queueTrackUri = queue.nowPlaying.spotifyUri;
+    const sameTrackBefore = previousPlayback.trackUri === queueTrackUri;
+    const sameTrackNow = currentPlayback.trackUri === queueTrackUri;
+    const wasPlaying = sameTrackBefore && !previousPlayback.isPaused;
+    const endedNearTail =
+      previousPlayback.durationMs > 0 &&
+      previousPlayback.positionMs >= previousPlayback.durationMs - 2000;
+    const rolledToTrackStart = currentPlayback.isPaused && currentPlayback.positionMs === 0;
+    const movedOffCurrentTrack = currentPlayback.trackUri !== null && !sameTrackNow;
+
+    if (!wasPlaying || !rolledToTrackStart || (!endedNearTail && !movedOffCurrentTrack)) {
+      return;
+    }
+
+    autoAdvanceInFlightRef.current = true;
+    setAdvancing(true);
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/queue/advance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ outcome: "played" }),
+        });
+        const data = await res.json();
+        setQueue(data);
+
+        if (data?.nowPlaying?.spotifyUri) {
+          lastClickPlayedId.current = data.nowPlaying.id;
+          player.clearResumeSnapshot();
+          await player.playUri(data.nowPlaying.spotifyUri);
+        } else {
+          lastClickPlayedId.current = null;
+          player.clearResumeSnapshot();
+        }
+      } finally {
+        autoAdvanceInFlightRef.current = false;
+        setAdvancing(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.playback, player.isSpeaker, player.status, queue?.nowPlaying?.id]);
 
   async function setPhase(phase: Phase) {
     const res = await fetch("/api/phase", {
