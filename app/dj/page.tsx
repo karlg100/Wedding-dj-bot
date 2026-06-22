@@ -15,11 +15,33 @@ function formatDuration(ms: number) {
   return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 
+const PASSCODE_KEY = "wedding-dj-admin-passcode";
+
 export default function DjPage() {
+  const [passcode, setPasscode] = useState("");
+  const [unlocked, setUnlocked] = useState(false);
   const [queue, setQueue] = useState<QueueState | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [advancing, setAdvancing] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
+
+  // Check sessionStorage for a previously entered passcode (shared with /admin).
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(PASSCODE_KEY);
+      if (saved) {
+        setPasscode(saved);
+        setUnlocked(true);
+      }
+    } catch {}
+  }, []);
+
+  function tryUnlock() {
+    setUnlocked(true);
+    try {
+      sessionStorage.setItem(PASSCODE_KEY, passcode);
+    } catch {}
+  }
   const player = useSpotifyPlayer({
     id: queue?.speakerDeviceId ?? null,
     name: queue?.speakerDeviceName ?? null,
@@ -58,6 +80,7 @@ export default function DjPage() {
       }
     }
 
+    if (!unlocked) return () => { cancelled = true; };
     checkConnection();
     refreshQueue();
     const interval = setInterval(refreshQueue, 4000);
@@ -65,7 +88,7 @@ export default function DjPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [refreshQueue]);
+  }, [refreshQueue, unlocked]);
 
   // When a new track becomes "now playing" — e.g. picked up via the 4s
   // poll because another device (admin override, another tab) advanced
@@ -190,6 +213,30 @@ export default function DjPage() {
     });
     const data = await res.json();
     setQueue(data);
+  }
+
+  if (!unlocked) {
+    return (
+      <main className="flex-1 flex items-center justify-center px-6">
+        <div className="w-full max-w-xs text-center">
+          <h1 className="font-display text-3xl mb-5">DJ Booth</h1>
+          <input
+            type="password"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
+            placeholder="Passcode"
+            className="w-full rounded-2xl border border-ink/15 bg-white px-4 py-3 text-center mb-3 outline-none focus:border-ink"
+          />
+          <button
+            onClick={tryUnlock}
+            className="w-full rounded-full bg-ink text-paper font-semibold py-3 hover:opacity-90 transition-opacity"
+          >
+            Enter
+          </button>
+        </div>
+      </main>
+    );
   }
 
   if (connected === false) {
