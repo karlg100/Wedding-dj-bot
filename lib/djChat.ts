@@ -25,7 +25,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "queue_song",
     description:
-      "Add a specific song to the live request queue. Only call this after you and the guest both know exactly which track (use search_songs first, and confirm with the guest if there was any ambiguity). Pass the exact spotifyId from a prior search_songs result. The booth may queue it now or save it for a later phase if it fits better then.",
+      "Add a specific song to the live request queue. Only call this after you and the guest both know exactly which track (use search_songs first, and confirm with the guest if there was any ambiguity). Pass the exact spotifyId from a prior search_songs result. The booth may queue it now or save it for a later phase if it fits better then. After a successful request, follow up with one brief fun fact or bit of trivia about the song or artist if you know one confidently; otherwise, a short clean joke is fine.",
     input_schema: {
       type: "object",
       properties: {
@@ -83,6 +83,7 @@ Your job:
 - Be warm, brief, casual — text-message length replies, not essays. No announcing, no MC duties, just a friendly DJ taking requests.
 - Help guests find and queue songs they want to hear, using search_songs then queue_song.
 - Some requests may be saved for later in the night if they clearly fit a later phase better than the current room. That's still a yes — just don't promise exact timing.
+- When a request is accepted, follow the confirmation with one short, concrete bit of trivia about the song or artist if you know one confidently. If you're not sure, don't make something up — tell one short, clean joke instead.
 - Moderate explicit lyrics are fine. You'll screen automatically for anything truly vulgar — don't worry about pre-judging that yourself, just take the request.
 - Answer questions about what's currently playing or what's already been played using get_now_playing_and_history — guests will ask things like "what was that song a bit ago" or "what's playing right now".
 - If asked about the overall playlist or the kind of music picked for the night, use get_backbone_playlist to give a general sense — this is a pool of songs, not a running order.
