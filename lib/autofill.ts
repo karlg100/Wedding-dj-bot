@@ -1,5 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getQueueState, addToQueue, tryClaimAutoFillSlot, getTasteList } from "./queue";
+import {
+  addToQueue,
+  getPendingRequestTracks,
+  getPlayableUpNext,
+  getQueueState,
+  getTasteList,
+  tryClaimAutoFillSlot,
+} from "./queue";
 import { searchTracks, getAudioFeatures } from "./spotify";
 import { screenTrack, phaseDescription } from "./curation";
 import { QueuedTrack } from "./types";
@@ -46,10 +53,11 @@ function buildContextMessage(params: {
   phase: string;
   tasteSeed: string[];
   recentlyPlayed: string[];
-  currentlyQueued: string[];
+  queueWindow: string[];
+  pendingRequests: string[];
   vibeSummary: string | null;
 }): string {
-  const { phase, tasteSeed, recentlyPlayed, currentlyQueued, vibeSummary } = params;
+  const { phase, tasteSeed, recentlyPlayed, queueWindow, pendingRequests, vibeSummary } = params;
   const lines: string[] = [];
   lines.push(`Current phase: ${phase}.`);
   if (vibeSummary) lines.push(`Room read from guests: ${vibeSummary}`);
@@ -61,8 +69,13 @@ function buildContextMessage(params: {
   if (recentlyPlayed.length) {
     lines.push(`Recently played tonight (don't repeat): ${recentlyPlayed.join(", ")}.`);
   }
-  if (currentlyQueued.length) {
-    lines.push(`Already queued up next (don't duplicate): ${currentlyQueued.join(", ")}.`);
+  if (queueWindow.length) {
+    lines.push(`Next 5 playable songs in the queue window: ${queueWindow.join(", ")}.`);
+  }
+  if (pendingRequests.length) {
+    lines.push(
+      `Pending guest requests anywhere in the queue or on hold: ${pendingRequests.join(", ")}.`
+    );
   }
   return lines.join("\n");
 }
@@ -73,7 +86,8 @@ function buildContextMessage(params: {
 // already claimed the slot.
 export async function maybeAutoFillQueue(): Promise<{ added: number } | null> {
   const state = await getQueueState();
-  if (state.upNext.length >= MIN_QUEUE_DEPTH) return null;
+  const playableUpNext = getPlayableUpNext(state);
+  if (playableUpNext.length >= MIN_QUEUE_DEPTH) return null;
 
   const claimed = await tryClaimAutoFillSlot();
   if (!claimed) return null;
@@ -100,7 +114,10 @@ export async function maybeAutoFillQueue(): Promise<{ added: number } | null> {
   const tasteSeed = [...tastePool].sort(() => Math.random() - 0.5).slice(0, 30);
 
   const recentlyPlayed = state.history.slice(0, 12).map((t) => `${t.title} by ${t.artist}`);
-  const currentlyQueued = state.upNext.map((t) => `${t.title} by ${t.artist}`);
+  const queueWindow = playableUpNext
+    .slice(0, 5)
+    .map((t) => `${t.title} by ${t.artist}`);
+  const pendingRequests = getPendingRequestTracks(state).map((t) => `${t.title} by ${t.artist}`);
 
   let vibeSummary: string | null = null;
   try {
@@ -114,7 +131,8 @@ export async function maybeAutoFillQueue(): Promise<{ added: number } | null> {
     phase: phaseDescription(state.phase),
     tasteSeed,
     recentlyPlayed,
-    currentlyQueued,
+    queueWindow,
+    pendingRequests,
     vibeSummary,
   });
 
@@ -174,6 +192,7 @@ export async function maybeAutoFillQueue(): Promise<{ added: number } | null> {
         requestNote: pick.reason ?? null,
         source: "autofill",
         status: "queued",
+        holdUntilPhase: null,
         screeningNote: "Picked by the DJ to keep the music going.",
         addedAt: Date.now(),
         playedAt: null,

@@ -12,6 +12,8 @@ export default function AdminPage() {
   const [vibe, setVibe] = useState<VibeSynthesis | null>(null);
   const [forceQuery, setForceQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const playableUpNext = queue?.upNext.filter((track) => track.status !== "held") ?? [];
+  const heldRequests = queue?.upNext.filter((track) => track.status === "held") ?? [];
 
   useEffect(() => {
     try {
@@ -198,14 +200,28 @@ export default function AdminPage() {
 
         {/* Queue with remove */}
         <h2 className="text-xs uppercase tracking-wider text-ink/45 font-semibold mb-2 px-1">
-          Queue · {queue?.upNext.length ?? 0}
+          Queue · {playableUpNext.length}
         </h2>
-        {queue && queue.upNext.length > 0 && (
+        {playableUpNext.length > 0 && (
           <SortableQueue
-            tracks={queue.upNext}
+            tracks={playableUpNext}
             onRemove={(entryId) => call("remove", { entryId })}
             onReorder={(orderedIds) => call("reorder", { orderedIds })}
           />
+        )}
+
+        {heldRequests.length > 0 && (
+          <>
+            <h2 className="text-xs uppercase tracking-wider text-ink/45 font-semibold mb-2 px-1">
+              Held requests · {heldRequests.length}
+            </h2>
+            <SortableQueue
+              tracks={heldRequests}
+              onRemove={(entryId) => call("remove", { entryId })}
+              onReorder={() => {}}
+              reorderable={false}
+            />
+          </>
         )}
       </div>
     </main>

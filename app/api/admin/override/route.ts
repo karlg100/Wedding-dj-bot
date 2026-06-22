@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
         requestNote: null,
         source: "request",
         status: "queued",
+        holdUntilPhase: null,
         screeningNote: "Admin override.",
         addedAt: Date.now(),
         playedAt: null,

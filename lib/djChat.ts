@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ChatMessage, QueuedTrack, VibeSynthesis } from "./types";
+import { ChatMessage, PHASES, Phase, QueuedTrack, QueueState, VibeSynthesis } from "./types";
 import { searchTracks, getAudioFeatures } from "./spotify";
 import { screenTrack, phaseDescription } from "./curation";
-import { addToQueue, getQueueState } from "./queue";
+import { addToQueue, getPendingRequestTracks, getPlayableUpNext, getQueueState } from "./queue";
 import { appendVibeRead, getRecentVibeReads, saveVibeSynthesis } from "./guestSessions";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -25,7 +25,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "queue_song",
     description:
-      "Add a specific song to the live request queue. Only call this after you and the guest both know exactly which track (use search_songs first, and confirm with the guest if there was any ambiguity). Pass the exact spotifyId from a prior search_songs result.",
+      "Add a specific song to the live request queue. Only call this after you and the guest both know exactly which track (use search_songs first, and confirm with the guest if there was any ambiguity). Pass the exact spotifyId from a prior search_songs result. The booth may queue it now or save it for a later phase if it fits better then.",
     input_schema: {
       type: "object",
       properties: {
@@ -82,6 +82,7 @@ Current phase of the night: ${phase}.
 Your job:
 - Be warm, brief, casual — text-message length replies, not essays. No announcing, no MC duties, just a friendly DJ taking requests.
 - Help guests find and queue songs they want to hear, using search_songs then queue_song.
+- Some requests may be saved for later in the night if they clearly fit a later phase better than the current room. That's still a yes — just don't promise exact timing.
 - Moderate explicit lyrics are fine. You'll screen automatically for anything truly vulgar — don't worry about pre-judging that yourself, just take the request.
 - Answer questions about what's currently playing or what's already been played using get_now_playing_and_history — guests will ask things like "what was that song a bit ago" or "what's playing right now".
 - If asked about the overall playlist or the kind of music picked for the night, use get_backbone_playlist to give a general sense — this is a pool of songs, not a running order.
@@ -135,6 +136,144 @@ export async function synthesizeVibe(): Promise<VibeSynthesis | null> {
     return null;
   }
 }
+
+type RequestPlacementDecision = {
+  decision: "queue" | "hold";
+  holdUntilPhase: Phase | null;
+  reason: string;
+};
+
+function parseJsonObject<T>(text: string): T | null {
+  try {
+    return JSON.parse(text.replace(/```json|```/g, "").trim()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function laterPhases(currentPhase: Phase): Phase[] {
+  const index = PHASES.findIndex((phase) => phase.id === currentPhase);
+  return index === -1 ? [] : PHASES.slice(index + 1).map((phase) => phase.id);
+}
+
+function phaseLabel(phase: Phase): string {
+  return PHASES.find((candidate) => candidate.id === phase)?.label ?? phase;
+}
+
+function isPhase(value: unknown): value is Phase {
+  return PHASES.some((phase) => phase.id === value);
+}
+
+async function decideRequestPlacement(
+  state: QueueState,
+  candidate: Pick<
+    QueuedTrack,
+    | "title"
+    | "artist"
+    | "album"
+    | "explicit"
+    | "energy"
+    | "tempo"
+    | "requestedBy"
+    | "requestNote"
+  >
+): Promise<RequestPlacementDecision> {
+  const holdOptions = laterPhases(state.phase);
+  if (holdOptions.length === 0) {
+    return {
+      decision: "queue",
+      holdUntilPhase: null,
+      reason: "Fits the current room.",
+    };
+  }
+
+  const nextFive = getPlayableUpNext(state)
+    .slice(0, 5)
+    .map((track) => ({
+      title: track.title,
+      artist: track.artist,
+      source: track.source,
+      requestedBy: track.requestedBy,
+      energy: track.energy,
+    }));
+
+  const pendingRequests = getPendingRequestTracks(state).map((track) => ({
+    title: track.title,
+    artist: track.artist,
+    status: track.status,
+    holdUntilPhase: track.holdUntilPhase,
+    requestedBy: track.requestedBy,
+  }));
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 220,
+      system: `You are assisting a wedding DJ. Decide whether a newly accepted song request should go into the playable queue now or be held for a later phase.
+
+Rules:
+- Output ONLY JSON with this exact shape: {"decision":"queue"|"hold","holdUntilPhase":null|"cocktail"|"dinner"|"dancing"|"lastcall","reason":string}
+- Hold only when the request is a noticeably better fit later than right now.
+- If you hold, choose exactly one later phase from this allowed list: ${holdOptions.join(", ")}.
+- Consider the next 5 playable songs for near-term continuity.
+- Also consider every pending guest request, even if it's deeper in the queue.
+- Never use "hold" as a rejection. The song is already accepted unless it was screened out elsewhere.
+- Keep the reason brief and DJ-facing.`,
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({
+            currentPhase: state.phase,
+            currentPhaseVibe: phaseDescription(state.phase),
+            candidate,
+            nextFivePlayableSongs: nextFive,
+            pendingRequests,
+          }),
+        },
+      ],
+    });
+
+    const text = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("")
+      .trim();
+
+    const parsed = parseJsonObject<{
+      decision?: string;
+      holdUntilPhase?: Phase | null;
+      reason?: string;
+    }>(text);
+
+    if (!parsed) {
+      throw new Error("Invalid JSON response");
+    }
+
+    if (parsed.decision === "hold" && isPhase(parsed.holdUntilPhase) && holdOptions.includes(parsed.holdUntilPhase)) {
+      return {
+        decision: "hold",
+        holdUntilPhase: parsed.holdUntilPhase,
+        reason:
+          parsed.reason?.trim() ||
+          `Better once the night reaches ${phaseLabel(parsed.holdUntilPhase)}.`,
+      };
+    }
+
+    return {
+      decision: "queue",
+      holdUntilPhase: null,
+      reason: parsed.reason?.trim() || "Fits the current room.",
+    };
+  } catch (error) {
+    console.error("Request placement decision failed", error);
+    return {
+      decision: "queue",
+      holdUntilPhase: null,
+      reason: "Fits the current room.",
+    };
+  }
+}
+
 export async function handleGuestMessage(
   guestId: string,
   guestName: string,
@@ -234,6 +373,16 @@ export async function handleGuestMessage(
         }
         const features = await getAudioFeatures([track.spotifyId]);
         const f = features[track.spotifyId];
+        const placement = await decideRequestPlacement(fresh, {
+          title: track.title,
+          artist: track.artist,
+          album: track.album,
+          explicit: track.explicit,
+          energy: f?.energy ?? null,
+          tempo: f?.tempo ?? null,
+          requestedBy: guestName || null,
+          requestNote: note?.trim() || null,
+        });
         const entry: QueuedTrack = {
           id: crypto.randomUUID(),
           spotifyUri: track.spotifyUri,
@@ -249,8 +398,9 @@ export async function handleGuestMessage(
           requestedBy: guestName || null,
           requestNote: note?.trim() || null,
           source: "request",
-          status: "queued",
-          screeningNote: screening.reason,
+          status: placement.decision === "hold" ? "held" : "queued",
+          holdUntilPhase: placement.holdUntilPhase,
+          screeningNote: placement.reason || screening.reason,
           addedAt: Date.now(),
           playedAt: null,
         };
@@ -259,7 +409,10 @@ export async function handleGuestMessage(
         toolResults.push({
           type: "tool_result",
           tool_use_id: use.id,
-          content: `Queued "${track.title}" by ${track.artist}.`,
+          content:
+            placement.decision === "hold" && placement.holdUntilPhase
+              ? `Accepted and held "${track.title}" by ${track.artist} for ${phaseLabel(placement.holdUntilPhase)}. Reason: ${placement.reason}`
+              : `Queued "${track.title}" by ${track.artist}. Reason: ${placement.reason}`,
         });
       } else if (use.name === "log_vibe_read") {
         const { energy, note } = use.input as { energy: "low" | "medium" | "high"; note?: string };

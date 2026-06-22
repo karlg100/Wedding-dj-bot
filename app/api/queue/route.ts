@@ -64,6 +64,7 @@ export async function POST(req: NextRequest) {
     requestNote: requestNote?.trim() || null,
     source: "request",
     status: screening.accept ? "queued" : "rejected",
+    holdUntilPhase: null,
     screeningNote: screening.reason,
     addedAt: Date.now(),
     playedAt: null,

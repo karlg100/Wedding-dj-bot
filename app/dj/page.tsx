@@ -24,6 +24,8 @@ export default function DjPage() {
     id: queue?.speakerDeviceId ?? null,
     name: queue?.speakerDeviceName ?? null,
   });
+  const playableUpNext = queue?.upNext.filter((track) => track.status !== "held") ?? [];
+  const heldRequests = queue?.upNext.filter((track) => track.status === "held") ?? [];
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -102,7 +104,7 @@ export default function DjPage() {
     // state settles) — iOS Safari requires audio to start from a real,
     // synchronous user gesture or it silently blocks sound while still
     // reporting success everywhere else.
-    const upcoming = queue?.upNext[0];
+    const upcoming = queue?.upNext.find((track) => track.status !== "held");
     if (upcoming) {
       lastClickPlayedId.current = upcoming.id;
       player.clearResumeSnapshot();
@@ -137,9 +139,11 @@ export default function DjPage() {
     // corrects it immediately if anything mismatches.
     setQueue((prev) => {
       if (!prev) return prev;
-      const byId = new Map(prev.upNext.map((t) => [t.id, t]));
+      const active = prev.upNext.filter((track) => track.status !== "held");
+      const held = prev.upNext.filter((track) => track.status === "held");
+      const byId = new Map(active.map((t) => [t.id, t]));
       const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean) as typeof prev.upNext;
-      return { ...prev, upNext: reordered };
+      return { ...prev, upNext: [...reordered, ...held] };
     });
     const res = await fetch("/api/queue/reorder", {
       method: "POST",
@@ -300,7 +304,7 @@ export default function DjPage() {
             </button>
             <button
               onClick={() => advance("played")}
-              disabled={advancing || !queue?.upNext.length}
+              disabled={advancing || playableUpNext.length === 0}
               className="flex-1 rounded-full bg-blush text-ink py-2.5 text-sm font-semibold hover:brightness-95 transition-all disabled:opacity-40"
             >
               Next track →
@@ -325,18 +329,34 @@ export default function DjPage() {
 
         {/* Queue */}
         <h2 className="text-xs uppercase tracking-[0.15em] text-ink/45 font-semibold mb-3 px-1">
-          Up next · {queue?.upNext.length ?? 0}
+          Up next · {playableUpNext.length}
         </h2>
-        {queue && queue.upNext.length > 0 ? (
+        {playableUpNext.length > 0 ? (
           <SortableQueue
-            tracks={queue.upNext}
+            tracks={playableUpNext}
             onRemove={removeTrack}
             onReorder={reorderTracks}
           />
         ) : (
           <p className="text-sm text-ink/40 mb-8 px-1">
-            Queue&rsquo;s empty — seed a playlist or wait on requests.
+            {heldRequests.length > 0
+              ? "Nothing is queued to play right now — held requests will surface when the phase changes."
+              : "Queue&rsquo;s empty — seed a playlist or wait on requests."}
           </p>
+        )}
+
+        {heldRequests.length > 0 && (
+          <>
+            <h2 className="text-xs uppercase tracking-[0.15em] text-ink/45 font-semibold mb-3 px-1">
+              Held requests · {heldRequests.length}
+            </h2>
+            <SortableQueue
+              tracks={heldRequests}
+              onRemove={removeTrack}
+              onReorder={() => {}}
+              reorderable={false}
+            />
+          </>
         )}
       </div>
     </main>

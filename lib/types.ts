@@ -8,7 +8,7 @@ export const PHASES: { id: Phase; label: string; vibe: string }[] = [
   { id: "lastcall", label: "Last Call", vibe: "Winding down, nostalgic, a final singalong or slow one." },
 ];
 
-export type RequestStatus = "pending" | "queued" | "playing" | "played" | "skipped" | "rejected";
+export type RequestStatus = "pending" | "queued" | "playing" | "played" | "skipped" | "rejected" | "held";
 
 export type QueuedTrack = {
   id: string; // unique id for this queue entry
@@ -26,6 +26,7 @@ export type QueuedTrack = {
   requestNote: string | null; // optional message from guest
   source: "seed" | "request" | "autofill";
   status: RequestStatus;
+  holdUntilPhase: Phase | null; // if "held", which phase triggers auto-release
   screeningNote: string | null; // why it was placed/flagged, shown in DJ view
   addedAt: number;
   playedAt: number | null;

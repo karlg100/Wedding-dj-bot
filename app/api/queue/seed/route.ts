@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
         requestNote: null,
         source: "seed",
         status: "queued",
+        holdUntilPhase: null,
         screeningNote: `Matched from: "${q}"`,
         addedAt: Date.now(),
         playedAt: null,
