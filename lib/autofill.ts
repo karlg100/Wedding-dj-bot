@@ -15,8 +15,8 @@ import { getVibeSynthesis } from "./guestSessions";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-sonnet-4-6";
 
-const MIN_QUEUE_DEPTH = 3; // top up whenever upNext drops below this
-const MAX_PICKS_PER_FILL = 3;
+const MIN_QUEUE_DEPTH = 5; // top up whenever playable upNext drops below this
+const MAX_PICKS_PER_FILL = 5;
 
 const AUTOFILL_TOOL: Anthropic.Tool = {
   name: "queue_picks",
